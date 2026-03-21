@@ -163,51 +163,44 @@ std::string GStreamerPipeline::build_pipeline_description(
             break;
     }
 
-    // Capsfilter for raw video format
-    ss << " ! video/x-raw,width=" << config.video_preset.width
+    // videoconvert + videoscale ensure format compatibility
+    // (libcamerasrc may output NV12/Rec709 that the encoder doesn't accept)
+    ss << " ! videoconvert"
+       << " ! videoscale"
+       << " ! video/x-raw,width=" << config.video_preset.width
        << ",height=" << config.video_preset.height
-       << ",framerate=" << config.video_preset.fps << "/1"
-       << ",format=NV12";
+       << ",framerate=" << config.video_preset.fps << "/1";
 
-    // Encoder
-    ss << " ! " << encoder_desc;
-
-    // H.264 parse to ensure byte-stream format with SPS/PPS before each keyframe
-    ss << " ! h264parse config-interval=-1";
-
-    // Capsfilter for H.264 byte-stream output
-    ss << " ! video/x-h264,stream-format=byte-stream,alignment=au"
-       << ",profile=baseline";
-
-    // Tee for multi-branch distribution
+    // Tee raw video to multiple branches — each branch encodes independently
     ss << " ! tee name=t";
 
-    // KVS branch: kvssink if enabled, otherwise fakesink placeholder
-    // NOTE: iot-certificate is a GstStructure property — it CANNOT be set via
-    // gst_parse_launch string syntax. It must be set programmatically via
-    // g_object_set after pipeline creation. See build() for the post-parse step.
+    // ── KVS branch: encode → h264parse → kvssink ──
+    // kvssink handles byte-stream H.264 directly (no avc conversion needed).
+    // iot-certificate is set programmatically in build() after gst_parse_launch.
     if (config.kvs_enabled && !config.kvs_stream_name.empty()) {
-        // kvssink requires stream-format=avc, so add h264parse to convert
-        ss << " t. ! queue max-size-time=" << (config.kvs_buffer_duration_ms * 1000000ULL)
-           << " leaky=0"
-           << " ! h264parse"
-           << " ! video/x-h264,stream-format=avc,alignment=au"
-           << " ! kvssink name=kvs_sink stream-name=\"" << config.kvs_stream_name << "\""
+        ss << " t. ! queue max-size-buffers=3 leaky=downstream"
+           << " ! " << encoder_desc
+           << " ! h264parse config-interval=-1"
+           << " ! kvssink name=kvs_sink"
+           << " stream-name=" << config.kvs_stream_name
            << " storage-size=" << config.kvs_storage_size_mb
+           << " aws-region=" << config.kvs_region
+           << " frame-timecodes=true"
            << " retention-period=" << config.kvs_retention_hours;
     } else {
-        ss << " t. ! queue max-size-time=" << (config.kvs_buffer_duration_ms * 1000000ULL)
-           << " leaky=0"
+        ss << " t. ! queue max-size-buffers=3 leaky=downstream"
            << " ! fakesink name=kvs_sink sync=false";
     }
 
-    // WebRTC branch: leaky queue (drop oldest frames)
-    ss << " t. ! queue max-size-buffers=" << config.webrtc_queue_size
-       << " leaky=2"
-       << " ! appsink name=webrtc_sink emit-signals=true sync=false";
+    // ── WebRTC branch: encode → h264parse → byte-stream appsink ──
+    ss << " t. ! queue max-size-buffers=3 leaky=downstream"
+       << " ! " << encoder_desc
+       << " ! h264parse config-interval=-1"
+       << " ! video/x-h264,stream-format=byte-stream,alignment=au"
+       << " ! appsink name=webrtc_sink max-buffers=1 drop=true sync=false emit-signals=true";
 
-    // AI branch: appsink for Frame_Buffer_Pool
-    ss << " t. ! queue max-size-buffers=2 leaky=2"
+    // ── AI branch: raw video appsink for Frame_Buffer_Pool ──
+    ss << " t. ! queue max-size-buffers=2 leaky=downstream"
        << " ! appsink name=ai_sink emit-signals=true sync=false";
 
     return ss.str();
@@ -269,6 +262,10 @@ VoidResult GStreamerPipeline::build(const PipelineConfig& config) {
     // Build pipeline description
     std::string desc = build_pipeline_description(config, encoder_desc);
 
+    // Diagnostic: log the full pipeline description and encoder choice
+    std::cerr << "[GStreamerPipeline] encoder=" << encoder_name_ << std::endl;
+    std::cerr << "[GStreamerPipeline] pipeline=" << desc << std::endl;
+
     // Parse and create pipeline
     GError* error = nullptr;
     GstElement* raw_pipeline = gst_parse_launch(desc.c_str(), &error);
@@ -290,24 +287,24 @@ VoidResult GStreamerPipeline::build(const PipelineConfig& config) {
             GST_BIN(raw_pipeline), encoder_name_);
     }
 
-    // Set iot-certificate on kvssink as GstStructure (cannot be set via gst_parse_launch)
-    if (config.kvs_enabled && !config.kvs_iot_certificate.empty()
+    // Set iot-certificate on kvssink via gst_structure_new (NOT gst_structure_from_string)
+    // This matches the proven pattern from ipc-kvs-demo.
+    if (config.kvs_enabled && !config.iot_credential_endpoint.empty()
         && GST_IS_BIN(raw_pipeline)) {
         GstElement* kvs_sink = find_element_by_factory(
             GST_BIN(raw_pipeline), "kvssink");
         if (kvs_sink) {
-            GstStructure* iot_cert = gst_structure_from_string(
-                config.kvs_iot_certificate.c_str(), nullptr);
-            if (iot_cert) {
-                g_object_set(kvs_sink, "iot-certificate", iot_cert, nullptr);
-                gst_structure_free(iot_cert);
-            } else {
-                state_ = State::ERROR;
-                return ErrVoid(ErrorCode::PipelineBuildFailed,
-                               "Failed to parse iot-certificate GstStructure from: "
-                                   + config.kvs_iot_certificate,
-                               "GStreamerPipeline::build");
-            }
+            GstStructure* iot_creds = gst_structure_new(
+                "iot-certificate",
+                "iot-thing-name", G_TYPE_STRING, config.iot_thing_name.c_str(),
+                "endpoint", G_TYPE_STRING, config.iot_credential_endpoint.c_str(),
+                "cert-path", G_TYPE_STRING, config.iot_cert_path.c_str(),
+                "key-path", G_TYPE_STRING, config.iot_key_path.c_str(),
+                "ca-path", G_TYPE_STRING, config.iot_ca_path.c_str(),
+                "role-aliases", G_TYPE_STRING, config.iot_role_alias.c_str(),
+                NULL);
+            g_object_set(G_OBJECT(kvs_sink), "iot-certificate", iot_creds, NULL);
+            gst_structure_free(iot_creds);
         }
     }
 

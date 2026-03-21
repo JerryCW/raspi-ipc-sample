@@ -31,10 +31,19 @@ struct PipelineConfig {
 
     // KVS upload config (used when kvssink is available)
     std::string kvs_stream_name;
-    std::string kvs_iot_certificate;    // comma-separated key=value for kvssink
+    std::string kvs_region;             // AWS region for kvssink aws-region property
     uint32_t kvs_storage_size_mb = 128; // kvssink storage-size (already in MB)
     uint32_t kvs_retention_hours = 168; // 7 days
     bool kvs_enabled = false;           // set true when IoT + KVS config is valid
+
+    // IoT certificate fields for kvssink iot-certificate GstStructure
+    // Set programmatically via gst_structure_new() after gst_parse_launch
+    std::string iot_thing_name;
+    std::string iot_credential_endpoint;
+    std::string iot_cert_path;
+    std::string iot_key_path;
+    std::string iot_ca_path;
+    std::string iot_role_alias;
 };
 
 // ============================================================

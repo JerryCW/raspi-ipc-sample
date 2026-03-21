@@ -151,8 +151,14 @@ int main(int argc, char* argv[]) {
         if (!config.kvs.stream_name.empty() && !config.iot.cert_path.empty()) {
             pipe_cfg.kvs_enabled = true;
             pipe_cfg.kvs_stream_name = config.kvs.stream_name;
-            pipe_cfg.kvs_iot_certificate = StreamUploader::build_iot_certificate_string(config.iot);
             pipe_cfg.kvs_retention_hours = config.kvs.retention_hours;
+            pipe_cfg.kvs_region = config.kvs.region;
+            pipe_cfg.iot_thing_name = config.iot.thing_name;
+            pipe_cfg.iot_credential_endpoint = config.iot.credential_endpoint;
+            pipe_cfg.iot_cert_path = config.iot.cert_path;
+            pipe_cfg.iot_key_path = config.iot.key_path;
+            pipe_cfg.iot_ca_path = config.iot.root_ca_path;
+            pipe_cfg.iot_role_alias = config.iot.role_alias;
             log_mgr->log(LogLevel::INFO, "main",
                 "KVS upload enabled: stream=" + config.kvs.stream_name);
         }

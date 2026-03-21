@@ -8,6 +8,38 @@
 using namespace sc;
 
 // ============================================================
+// Helper: populate IoT credential fields on PipelineConfig
+// ============================================================
+
+namespace {
+
+void set_iot_fields(PipelineConfig& config,
+                    const std::string& thing = "cam",
+                    const std::string& endpoint = "ep",
+                    const std::string& cert = "/c",
+                    const std::string& key = "/k",
+                    const std::string& ca = "/ca",
+                    const std::string& role = "role") {
+    config.iot_thing_name = thing;
+    config.iot_credential_endpoint = endpoint;
+    config.iot_cert_path = cert;
+    config.iot_key_path = key;
+    config.iot_ca_path = ca;
+    config.iot_role_alias = role;
+}
+
+void clear_iot_fields(PipelineConfig& config) {
+    config.iot_thing_name.clear();
+    config.iot_credential_endpoint.clear();
+    config.iot_cert_path.clear();
+    config.iot_key_path.clear();
+    config.iot_ca_path.clear();
+    config.iot_role_alias.clear();
+}
+
+}  // namespace
+
+// ============================================================
 // Factory
 // ============================================================
 
@@ -442,10 +474,18 @@ TEST(PipelineConfig, DefaultValues) {
 
     // KVS upload config defaults
     EXPECT_TRUE(config.kvs_stream_name.empty());
-    EXPECT_TRUE(config.kvs_iot_certificate.empty());
+    EXPECT_TRUE(config.kvs_region.empty());
     EXPECT_EQ(config.kvs_storage_size_mb, 128u);
     EXPECT_EQ(config.kvs_retention_hours, 168u);
     EXPECT_FALSE(config.kvs_enabled);
+
+    // IoT certificate fields default empty
+    EXPECT_TRUE(config.iot_thing_name.empty());
+    EXPECT_TRUE(config.iot_credential_endpoint.empty());
+    EXPECT_TRUE(config.iot_cert_path.empty());
+    EXPECT_TRUE(config.iot_key_path.empty());
+    EXPECT_TRUE(config.iot_ca_path.empty());
+    EXPECT_TRUE(config.iot_role_alias.empty());
 }
 
 // ============================================================
@@ -477,7 +517,7 @@ TEST(GStreamerPipeline, BuildWithKvsEnabledSucceeds) {
     config.video_preset = PRESET_DEFAULT;
     config.kvs_enabled = true;
     config.kvs_stream_name = "test-stream";
-    config.kvs_iot_certificate = "iot-thing-name=cam,endpoint=ep,cert-path=/c,key-path=/k,ca-path=/ca,role-aliases=role";
+    set_iot_fields(config);
     config.kvs_storage_size_mb = 256;
     config.kvs_retention_hours = 48;
 
@@ -506,7 +546,7 @@ TEST(GStreamerPipeline, FullLifecycleWithKvsConfig) {
     config.video_preset = PRESET_DEFAULT;
     config.kvs_enabled = true;
     config.kvs_stream_name = "lifecycle-stream";
-    config.kvs_iot_certificate = "iot-thing-name=cam,endpoint=ep,cert-path=/c,key-path=/k,ca-path=/ca,role-aliases=role";
+    set_iot_fields(config);
 
     ASSERT_TRUE(pipeline->build(config).is_ok());
     ASSERT_TRUE(pipeline->start().is_ok());
@@ -533,7 +573,7 @@ TEST(GStreamerPipeline, BuildWithKvsEnabled_EmptyIotCertificate_Succeeds) {
     config.video_preset = PRESET_DEFAULT;
     config.kvs_enabled = true;
     config.kvs_stream_name = "test-stream";
-    config.kvs_iot_certificate = "";  // empty — skip post-parse step
+    // IoT fields left empty — skip post-parse step
 
     auto result = pipeline->build(config);
     EXPECT_TRUE(result.is_ok());
@@ -548,7 +588,7 @@ TEST(GStreamerPipeline, BuildWithKvsEnabled_EmptyStreamName_UsesFakesink) {
     config.video_preset = PRESET_DEFAULT;
     config.kvs_enabled = true;
     config.kvs_stream_name = "";  // empty → fakesink path
-    config.kvs_iot_certificate = "iot-thing-name=cam,endpoint=ep,cert-path=/c,key-path=/k,ca-path=/ca,role-aliases=role";
+    set_iot_fields(config);
 
     auto result = pipeline->build(config);
     EXPECT_TRUE(result.is_ok());
@@ -563,7 +603,7 @@ TEST(GStreamerPipeline, BuildWithKvsDisabled_IotCertificateIgnored) {
     config.video_preset = PRESET_DEFAULT;
     config.kvs_enabled = false;
     config.kvs_stream_name = "some-stream";
-    config.kvs_iot_certificate = "iot-thing-name=cam,endpoint=ep,cert-path=/c,key-path=/k,ca-path=/ca,role-aliases=role";
+    set_iot_fields(config);
 
     auto result = pipeline->build(config);
     EXPECT_TRUE(result.is_ok());
@@ -578,7 +618,7 @@ TEST(GStreamerPipeline, BuildWithKvsEnabled_CustomStorageAndRetention) {
     config.video_preset = PRESET_DEFAULT;
     config.kvs_enabled = true;
     config.kvs_stream_name = "custom-stream";
-    config.kvs_iot_certificate = "iot-thing-name=cam,endpoint=ep,cert-path=/c,key-path=/k,ca-path=/ca,role-aliases=role";
+    set_iot_fields(config);
     config.kvs_storage_size_mb = 64;    // smaller than default 128
     config.kvs_retention_hours = 24;    // 1 day instead of 7
 
@@ -595,7 +635,7 @@ TEST(GStreamerPipeline, RebuildWithDifferentKvsConfig) {
     config.video_preset = PRESET_DEFAULT;
     config.kvs_enabled = true;
     config.kvs_stream_name = "first-stream";
-    config.kvs_iot_certificate = "iot-thing-name=cam,endpoint=ep,cert-path=/c,key-path=/k,ca-path=/ca,role-aliases=role";
+    set_iot_fields(config);
 
     ASSERT_TRUE(pipeline->build(config).is_ok());
     ASSERT_TRUE(pipeline->destroy().is_ok());
@@ -603,7 +643,7 @@ TEST(GStreamerPipeline, RebuildWithDifferentKvsConfig) {
     // Rebuild with KVS disabled
     config.kvs_enabled = false;
     config.kvs_stream_name = "";
-    config.kvs_iot_certificate = "";
+    clear_iot_fields(config);
 
     auto result = pipeline->build(config);
     EXPECT_TRUE(result.is_ok());

@@ -1,5 +1,25 @@
 # 变更日志
 
+## [0.2.2] - 2026-03-21
+
+### 修复
+
+- **KVS 管道无视频上传**：参考 ipc-kvs-demo 工作管道，发现三个关键差异导致 kvssink 收不到帧：
+  1. 原管道在 tee 之前编码（所有分支共享一个 H.264 流），KVS 分支又做 `byte-stream → avc` 转换导致 kvssink 卡住。改为 tee 分发原始视频，每个分支独立编码（匹配 demo 架构）。
+  2. 缺少 `aws-region` 和 `frame-timecodes=true` 属性。
+  3. 缺少 `videoconvert ! videoscale`（libcamerasrc 输出的 NV12/Rec709 colorimetry 可能不被编码器直接接受）。
+- **iot-certificate 改用 `gst_structure_new`**：从 `gst_structure_from_string` 改为 `gst_structure_new`（与 demo 一致），直接传递 IoT 配置字段而非预格式化字符串，更可靠。
+- **PipelineConfig 拆分 IoT 字段**：移除 `kvs_iot_certificate` 字符串字段，改为独立的 `iot_thing_name`、`iot_credential_endpoint`、`iot_cert_path`、`iot_key_path`、`iot_ca_path`、`iot_role_alias` 字段，新增 `kvs_region` 字段。
+
+### 涉及文件
+
+- `include/pipeline/gstreamer_pipeline.h` — PipelineConfig 字段重构
+- `src/pipeline/gstreamer_pipeline.cpp` — 管道架构重写 + gst_structure_new
+- `src/main.cpp` — 传递独立 IoT 字段和 region
+- `tests/test_gstreamer_pipeline.cpp` — 测试适配新字段
+
+---
+
 ## [0.2.1] - 2026-03-21
 
 ### 修复

@@ -1,5 +1,17 @@
 # 变更日志
 
+## [0.2.4] - 2026-03-21
+
+### 修复
+
+- **GMainLoop 必须在 set_state(PLAYING) 之前启动**：kvssink 在状态转换过程中会触发异步回调（IoT credential fetch 等），这些回调依赖 GMainLoop 已经在运行。之前的顺序是先 set_state 再启动 bus_thread_，导致回调无法被调度，帧无法流入 kvssink。调整为：先 `g_main_loop_new` + `gst_bus_add_watch` + 启动 bus_thread_，再 `gst_element_set_state(PLAYING)`。新增 state change return value 诊断日志。
+
+### 涉及文件
+
+- `src/pipeline/gstreamer_pipeline.cpp` — start() 中 GMainLoop 启动顺序调整
+
+---
+
 ## [0.2.3] - 2026-03-21
 
 ### 修复

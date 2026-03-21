@@ -664,3 +664,179 @@ TEST(GStreamerPipeline, BuildWithKvsEnabled_CustomBufferDuration) {
     EXPECT_TRUE(result.is_ok());
     EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
 }
+
+// ============================================================
+// Start/Stop lifecycle stress tests
+// These exercise the start() → stop() → start() path that
+// involves GMainLoop thread creation/teardown on real GStreamer.
+// On stub, they verify state machine consistency under rapid cycling.
+// ============================================================
+
+TEST(GStreamerPipeline, RapidStartStopCycles) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+
+    // Rapid start/stop cycles — exercises bus_thread_ join + re-creation
+    for (int i = 0; i < 10; ++i) {
+        auto start_result = pipeline->start();
+        ASSERT_TRUE(start_result.is_ok())
+            << "start() failed on cycle " << i;
+        EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+
+        auto stop_result = pipeline->stop();
+        ASSERT_TRUE(stop_result.is_ok())
+            << "stop() failed on cycle " << i;
+        EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PAUSED);
+    }
+
+    // Final cleanup
+    EXPECT_TRUE(pipeline->destroy().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
+}
+
+TEST(GStreamerPipeline, StartStopWithBitrateChangeBetween) {
+    // Verify bitrate can be changed while paused (between start/stop),
+    // then pipeline restarts cleanly — exercises the full thread lifecycle
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+    ASSERT_TRUE(pipeline->stop().is_ok());
+
+    // Change bitrate while paused
+    ASSERT_TRUE(pipeline->set_bitrate(512).is_ok());
+
+    // Restart — on real GStreamer this creates a new GMainLoop + bus_thread_
+    ASSERT_TRUE(pipeline->start().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+}
+
+TEST(GStreamerPipeline, DestroyFromPlayingThenRebuildAndStart) {
+    // Destroy while PLAYING (skipping stop), then rebuild and start again.
+    // On real GStreamer, destroy must quit the GMainLoop and join bus_thread_
+    // before releasing pipeline resources.
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+
+    // Destroy directly from PLAYING — no stop() first
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
+    EXPECT_TRUE(pipeline->encoder_name().empty());
+
+    // Rebuild and start fresh — verifies clean teardown
+    config.video_preset = PRESET_HD;
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+    EXPECT_FALSE(pipeline->encoder_name().empty());
+
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+}
+
+TEST(GStreamerPipeline, ConcurrentStateReadsWhileStarting) {
+    // Read state from multiple threads while start() is in progress.
+    // On real GStreamer, start() holds the mutex while creating the
+    // GMainLoop and setting PLAYING — readers must not deadlock.
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+
+    std::atomic<bool> stop_readers{false};
+    std::vector<std::thread> readers;
+
+    // Start reader threads before calling start()
+    for (int i = 0; i < 4; ++i) {
+        readers.emplace_back([&pipeline, &stop_readers]() {
+            while (!stop_readers.load(std::memory_order_relaxed)) {
+                auto state = pipeline->current_state();
+                // State should always be a valid enum value
+                EXPECT_TRUE(
+                    state == IGStreamerPipeline::State::READY ||
+                    state == IGStreamerPipeline::State::PLAYING ||
+                    state == IGStreamerPipeline::State::PAUSED ||
+                    state == IGStreamerPipeline::State::NULL_STATE);
+                auto enc = pipeline->encoder_name();
+                (void)enc;
+            }
+        });
+    }
+
+    // Start and stop while readers are active
+    ASSERT_TRUE(pipeline->start().is_ok());
+    ASSERT_TRUE(pipeline->stop().is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+
+    stop_readers.store(true, std::memory_order_relaxed);
+    for (auto& t : readers) t.join();
+
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+}
+
+TEST(GStreamerPipeline, StopFromPausedIsIdempotent) {
+    // Calling stop() when already PAUSED — on real GStreamer this should
+    // not try to quit/join a GMainLoop that was already torn down.
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+    ASSERT_TRUE(pipeline->stop().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PAUSED);
+
+    // Second stop from PAUSED — should succeed without hanging
+    auto result = pipeline->stop();
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PAUSED);
+
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+}
+
+TEST(GStreamerPipeline, StartWithKvsConfig_FullCycle) {
+    // Full lifecycle with KVS config — on real GStreamer, start() must
+    // create the GMainLoop before set_state(PLAYING) so kvssink can
+    // dispatch async credential callbacks during the state transition.
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+    config.kvs_enabled = true;
+    config.kvs_stream_name = "start-test-stream";
+    set_iot_fields(config);
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+
+    // Dynamic bitrate while playing
+    ASSERT_TRUE(pipeline->set_bitrate(1024).is_ok());
+
+    ASSERT_TRUE(pipeline->stop().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PAUSED);
+
+    // Restart
+    ASSERT_TRUE(pipeline->start().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
+}

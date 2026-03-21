@@ -379,9 +379,21 @@ VoidResult GStreamerPipeline::start() {
     gst_bus_add_watch(bus, bus_callback, this);
     gst_object_unref(bus);
 
-    // Set pipeline to PLAYING
+    // Start GMainLoop BEFORE set_state(PLAYING) — kvssink needs the loop
+    // running to dispatch its async credential/connection callbacks during
+    // the state transition.
+    bus_thread_ = std::thread([this]() {
+        g_main_loop_run(loop_);
+    });
+
+    // Set pipeline to PLAYING (may trigger async kvssink operations that
+    // require the GMainLoop to be running)
     GstStateChangeReturn ret = gst_element_set_state(pipeline_.get(), GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE) {
+        g_main_loop_quit(loop_);
+        lock.unlock();
+        if (bus_thread_.joinable()) bus_thread_.join();
+        lock.lock();
         g_main_loop_unref(loop_);
         loop_ = nullptr;
         state_ = State::ERROR;
@@ -391,11 +403,8 @@ VoidResult GStreamerPipeline::start() {
     }
 
     state_ = State::PLAYING;
-
-    // Run GMainLoop on a dedicated thread for bus callbacks
-    bus_thread_ = std::thread([this]() {
-        g_main_loop_run(loop_);
-    });
+    std::cerr << "[GStreamerPipeline] Pipeline set to PLAYING (ret="
+              << ret << ", 1=SUCCESS, 2=ASYNC, 3=NO_PREROLL)" << std::endl;
 
     return OkVoid();
 }

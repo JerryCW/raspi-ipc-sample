@@ -54,7 +54,7 @@ KVSStreamConfig make_default_config() {
 }
 
 // ============================================================
-// Tests: iot-certificate string format (GstStructure serialization)
+// Tests: iot-certificate string format
 // ============================================================
 
 TEST(StreamUploaderTest, BuildIotCertificateString_CorrectFormat) {
@@ -68,21 +68,22 @@ TEST(StreamUploaderTest, BuildIotCertificateString_CorrectFormat) {
 
     auto result = StreamUploader::build_iot_certificate_string(iot);
 
-    // Verify GstStructure serialization format: "name, key=(type)value, ..."
-    EXPECT_NE(result.find("iot-thing-name=(string)my-camera"), std::string::npos);
-    EXPECT_NE(result.find("endpoint=(string)xxxx.credentials.iot.ap-northeast-1.amazonaws.com"),
+    // Verify comma-separated key=value format
+    EXPECT_NE(result.find("iot-thing-name=my-camera"), std::string::npos);
+    EXPECT_NE(result.find("endpoint=xxxx.credentials.iot.ap-northeast-1.amazonaws.com"),
               std::string::npos);
-    EXPECT_NE(result.find("cert-path=(string)/etc/certs/device.cert.pem"), std::string::npos);
-    EXPECT_NE(result.find("key-path=(string)/etc/certs/device.private.key"), std::string::npos);
-    EXPECT_NE(result.find("ca-path=(string)/etc/certs/AmazonRootCA1.pem"), std::string::npos);
-    EXPECT_NE(result.find("role-aliases=(string)SmartCameraRole"), std::string::npos);
+    EXPECT_NE(result.find("cert-path=/etc/certs/device.cert.pem"), std::string::npos);
+    EXPECT_NE(result.find("key-path=/etc/certs/device.private.key"), std::string::npos);
+    EXPECT_NE(result.find("ca-path=/etc/certs/AmazonRootCA1.pem"), std::string::npos);
+    EXPECT_NE(result.find("role-aliases=SmartCameraRole"), std::string::npos);
 
-    // Structure name + 6 fields = 6 commas
+    // Verify fields are comma-separated
+    // Count commas — should be 5 (6 fields, 5 separators)
     auto comma_count = std::count(result.begin(), result.end(), ',');
-    EXPECT_EQ(comma_count, 6);
+    EXPECT_EQ(comma_count, 5);
 }
 
-TEST(StreamUploaderTest, BuildIotCertificateString_StartsWithStructureName) {
+TEST(StreamUploaderTest, BuildIotCertificateString_AllFieldsPresent) {
     IoTCertConfig iot;
     iot.thing_name = "thing";
     iot.credential_endpoint = "endpoint";
@@ -93,11 +94,86 @@ TEST(StreamUploaderTest, BuildIotCertificateString_StartsWithStructureName) {
 
     auto result = StreamUploader::build_iot_certificate_string(iot);
 
-    // Must start with the GstStructure name "iot-certificate"
-    EXPECT_EQ(result.substr(0, 15), "iot-certificate");
+    // Should start with iot-thing-name
+    EXPECT_EQ(result.substr(0, 15), "iot-thing-name=");
 
-    // Must contain (string) type annotations for gst_structure_from_string
-    EXPECT_NE(result.find("(string)"), std::string::npos);
+    // Should not contain spaces (kvssink expects no spaces in the string)
+    EXPECT_EQ(result.find(' '), std::string::npos);
+}
+
+TEST(StreamUploaderTest, BuildIotCertificateString_NoGstStructureAnnotations) {
+    IoTCertConfig iot;
+    iot.thing_name = "cam";
+    iot.credential_endpoint = "ep";
+    iot.cert_path = "/c";
+    iot.key_path = "/k";
+    iot.root_ca_path = "/ca";
+    iot.role_alias = "role";
+
+    auto result = StreamUploader::build_iot_certificate_string(iot);
+
+    // Must NOT contain GstStructure type annotations
+    EXPECT_EQ(result.find("(string)"), std::string::npos);
+    // Must NOT start with "iot-certificate" structure name prefix
+    EXPECT_EQ(result.find("iot-certificate,"), std::string::npos);
+    EXPECT_EQ(result.find("iot-certificate "), std::string::npos);
+}
+
+TEST(StreamUploaderTest, BuildIotCertificateString_ExactOutput) {
+    IoTCertConfig iot;
+    iot.thing_name = "cam";
+    iot.credential_endpoint = "ep.iot.amazonaws.com";
+    iot.cert_path = "/cert.pem";
+    iot.key_path = "/key.pem";
+    iot.root_ca_path = "/ca.pem";
+    iot.role_alias = "MyRole";
+
+    auto result = StreamUploader::build_iot_certificate_string(iot);
+
+    std::string expected =
+        "iot-thing-name=cam"
+        ",endpoint=ep.iot.amazonaws.com"
+        ",cert-path=/cert.pem"
+        ",key-path=/key.pem"
+        ",ca-path=/ca.pem"
+        ",role-aliases=MyRole";
+    EXPECT_EQ(result, expected);
+}
+
+TEST(StreamUploaderTest, BuildIotCertificateString_EmptyFields) {
+    IoTCertConfig iot;
+    // All fields default-constructed (empty strings)
+
+    auto result = StreamUploader::build_iot_certificate_string(iot);
+
+    // Should still produce valid structure with empty values
+    EXPECT_EQ(result, "iot-thing-name=,endpoint=,cert-path=,key-path=,ca-path=,role-aliases=");
+}
+
+TEST(StreamUploaderTest, BuildIotCertificateString_FieldOrder) {
+    IoTCertConfig iot;
+    iot.thing_name = "T";
+    iot.credential_endpoint = "E";
+    iot.cert_path = "C";
+    iot.key_path = "K";
+    iot.root_ca_path = "CA";
+    iot.role_alias = "R";
+
+    auto result = StreamUploader::build_iot_certificate_string(iot);
+
+    // Verify field ordering: thing-name, endpoint, cert-path, key-path, ca-path, role-aliases
+    auto pos_thing = result.find("iot-thing-name=");
+    auto pos_ep    = result.find("endpoint=");
+    auto pos_cert  = result.find("cert-path=");
+    auto pos_key   = result.find("key-path=");
+    auto pos_ca    = result.find("ca-path=");
+    auto pos_role  = result.find("role-aliases=");
+
+    EXPECT_LT(pos_thing, pos_ep);
+    EXPECT_LT(pos_ep, pos_cert);
+    EXPECT_LT(pos_cert, pos_key);
+    EXPECT_LT(pos_key, pos_ca);
+    EXPECT_LT(pos_ca, pos_role);
 }
 
 // ============================================================

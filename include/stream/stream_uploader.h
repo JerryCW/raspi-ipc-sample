@@ -61,8 +61,7 @@ public:
     uint64_t bytes_uploaded() const override;
 
     // Build the iot-certificate property string for kvssink
-    // Format: GstStructure serialization for g_object_set / gst_structure_from_string
-    // "iot-certificate, iot-thing-name=(string)xxx, endpoint=(string)xxx, ..."
+    // Format: "iot-thing-name=xxx,endpoint=xxx,cert-path=xxx,key-path=xxx,ca-path=xxx,role-aliases=xxx"
     static std::string build_iot_certificate_string(const IoTCertConfig& iot_config);
 
     // Reconnection constants

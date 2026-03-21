@@ -297,15 +297,6 @@ VoidResult GStreamerPipeline::build(const PipelineConfig& config) {
 
     pipeline_.reset(raw_pipeline);
 
-    // Diagnostic: check if gst_parse_launch returned a GstPipeline
-    if (GST_IS_PIPELINE(raw_pipeline)) {
-        std::cerr << "[GStreamerPipeline] parse returned GstPipeline (good)" << std::endl;
-    } else if (GST_IS_BIN(raw_pipeline)) {
-        std::cerr << "[GStreamerPipeline] parse returned GstBin (NOT GstPipeline!)" << std::endl;
-    } else {
-        std::cerr << "[GStreamerPipeline] parse returned GstElement (NOT GstPipeline!)" << std::endl;
-    }
-
     // Find encoder element by factory name for dynamic bitrate control
     if (GST_IS_BIN(raw_pipeline)) {
         encoder_element_ = find_element_by_factory(
@@ -407,29 +398,7 @@ VoidResult GStreamerPipeline::start() {
     }
 
     state_ = State::PLAYING;
-    std::cerr << "[GStreamerPipeline] Pipeline set to PLAYING (ret="
-              << ret << ", 1=SUCCESS, 2=ASYNC)" << std::endl;
-
-    // Diagnostic: check if pipeline has a clock (required for data flow)
-    if (GST_IS_PIPELINE(pipeline_.get())) {
-        GstClock* clock = gst_pipeline_get_clock(GST_PIPELINE(pipeline_.get()));
-        if (clock) {
-            std::cerr << "[GStreamerPipeline] Pipeline clock: "
-                      << GST_OBJECT_NAME(clock) << std::endl;
-            gst_object_unref(clock);
-        } else {
-            std::cerr << "[GStreamerPipeline] WARNING: Pipeline has NO clock!" << std::endl;
-        }
-    }
-
-    // Diagnostic: check actual GStreamer state
-    {
-        GstState actual_state, pending_state;
-        gst_element_get_state(pipeline_.get(), &actual_state, &pending_state, 0);
-        std::cerr << "[GStreamerPipeline] Actual state=" << actual_state
-                  << " pending=" << pending_state
-                  << " (4=PLAYING, 3=PAUSED, 0=VOID)" << std::endl;
-    }
+    std::cerr << "[GStreamerPipeline] Pipeline PLAYING (ret=" << ret << ")" << std::endl;
 
     return OkVoid();
 }

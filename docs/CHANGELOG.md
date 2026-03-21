@@ -1,5 +1,17 @@
 # 变更日志
 
+## [0.1.3] - 2026-03-21
+
+### 修复
+
+- **WebRTC SDK 头文件路径**：SDK 的头文件分布在 `src/include/`（webrtcclient）和 `open-source/include/`（依赖库）两个目录，之前只搜索了 `include/` 导致找不到 `com/amazonaws/kinesis/video/webrtcclient/Include.h`。
+
+### 涉及文件
+
+- `CMakeLists.txt`
+
+---
+
 ## [0.1.2] - 2026-03-21
 
 ### 修复

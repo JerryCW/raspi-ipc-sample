@@ -92,11 +92,10 @@ if(NOT KVSWebRTC_FOUND)
 
     if(KVS_WEBRTC_SDK_DIR)
         set(KVSWebRTC_FOUND TRUE)
-        # Set include and library paths
+        # Set include paths — SDK headers are split across src/include and open-source/include
         set(KVS_WEBRTC_INCLUDE_DIRS
-            "${KVS_WEBRTC_SDK_DIR}/include"
-            "${KVS_WEBRTC_SDK_DIR}/build"
-            "${KVS_WEBRTC_SDK_DIR}/open-source/lib/pkgconfig/../../include"
+            "${KVS_WEBRTC_SDK_DIR}/src/include"
+            "${KVS_WEBRTC_SDK_DIR}/open-source/include"
         )
         # Find the library
         find_library(KVS_WEBRTC_LIB kvsWebrtcClient

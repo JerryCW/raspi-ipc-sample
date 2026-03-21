@@ -28,6 +28,13 @@ struct PipelineConfig {
     uint32_t gop_size = 0;              // 0 = match fps
     uint32_t webrtc_queue_size = 5;     // leaky queue capacity (frames)
     uint32_t kvs_buffer_duration_ms = 2000;
+
+    // KVS upload config (used when kvssink is available)
+    std::string kvs_stream_name;
+    std::string kvs_iot_certificate;    // comma-separated key=value for kvssink
+    uint32_t kvs_storage_size_mb = 128; // kvssink storage-size (already in MB)
+    uint32_t kvs_retention_hours = 168; // 7 days
+    bool kvs_enabled = false;           // set true when IoT + KVS config is valid
 };
 
 // ============================================================

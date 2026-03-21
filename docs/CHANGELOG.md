@@ -1,5 +1,19 @@
 # 变更日志
 
+## [0.2.0] - 2026-03-21
+
+### 新功能
+
+- **GStreamer 管道集成 kvssink 直接上传**：当 IoT 证书和 KVS 流名称配置有效时，GStreamer 管道的 KVS 分支直接使用 `kvssink` 元素上传视频到 AWS Kinesis Video Streams，无需通过 appsink 中转。kvssink 使用 `iot-certificate` 属性进行 IoT 认证，`stream-format=avc` 格式封装 H.264 数据。未配置时回退到 `fakesink`。
+
+### 涉及文件
+
+- `include/pipeline/gstreamer_pipeline.h` — PipelineConfig 新增 KVS 字段
+- `src/pipeline/gstreamer_pipeline.cpp` — 管道描述构建器集成 kvssink
+- `src/main.cpp` — 传递 IoT 证书和 KVS 配置到管道
+
+---
+
 ## [0.1.7] - 2026-03-21
 
 ### 修复

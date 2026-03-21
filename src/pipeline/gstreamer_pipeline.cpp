@@ -182,10 +182,22 @@ std::string GStreamerPipeline::build_pipeline_description(
     // Tee for multi-branch distribution
     ss << " ! tee name=t";
 
-    // KVS branch: standard queue (non-leaky, ensures recording integrity)
-    ss << " t. ! queue max-size-time=" << (config.kvs_buffer_duration_ms * 1000000ULL)
-       << " leaky=0"
-       << " ! appsink name=kvs_sink emit-signals=true sync=false";
+    // KVS branch: kvssink if enabled, otherwise fakesink placeholder
+    if (config.kvs_enabled && !config.kvs_stream_name.empty()) {
+        // kvssink requires stream-format=avc, so add h264parse to convert
+        ss << " t. ! queue max-size-time=" << (config.kvs_buffer_duration_ms * 1000000ULL)
+           << " leaky=0"
+           << " ! h264parse"
+           << " ! video/x-h264,stream-format=avc,alignment=au"
+           << " ! kvssink stream-name=\"" << config.kvs_stream_name << "\""
+           << " storage-size=" << config.kvs_storage_size_mb
+           << " retention-period=" << config.kvs_retention_hours
+           << " iot-certificate=\"" << config.kvs_iot_certificate << "\"";
+    } else {
+        ss << " t. ! queue max-size-time=" << (config.kvs_buffer_duration_ms * 1000000ULL)
+           << " leaky=0"
+           << " ! fakesink name=kvs_sink sync=false";
+    }
 
     // WebRTC branch: leaky queue (drop oldest frames)
     ss << " t. ! queue max-size-buffers=" << config.webrtc_queue_size

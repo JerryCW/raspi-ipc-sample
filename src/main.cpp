@@ -146,6 +146,17 @@ int main(int argc, char* argv[]) {
         pipe_cfg.source_type = config.camera_source;
         pipe_cfg.device_path = config.camera_device_path;
         pipe_cfg.video_preset = config.video_preset;
+
+        // Configure KVS upload if IoT certs and stream name are available
+        if (!config.kvs.stream_name.empty() && !config.iot.cert_path.empty()) {
+            pipe_cfg.kvs_enabled = true;
+            pipe_cfg.kvs_stream_name = config.kvs.stream_name;
+            pipe_cfg.kvs_iot_certificate = StreamUploader::build_iot_certificate_string(config.iot);
+            pipe_cfg.kvs_retention_hours = config.kvs.retention_hours;
+            log_mgr->log(LogLevel::INFO, "main",
+                "KVS upload enabled: stream=" + config.kvs.stream_name);
+        }
+
         auto res = gst_pipeline->build(pipe_cfg);
         if (res.is_err()) {
             log_mgr->log(LogLevel::ERROR, "main",

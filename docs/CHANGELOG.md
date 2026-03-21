@@ -1,5 +1,17 @@
 # 变更日志
 
+## [0.3.0] - 2026-03-21
+
+### 修复
+
+- **appsink 阻塞管道 PAUSED→PLAYING 状态转换**：根因分析发现 `gst_element_set_state(PLAYING)` 返回 ASYNC 后永远不完成。GStreamer 在 PAUSED→PLAYING 转换时要求每个元素完成状态变更，appsink 在 PAUSED 状态会等待 preroll buffer 被消费后才能转到 PLAYING。由于 WebRTC 和 AI 分支的 appsink 没有连接 `new-sample` 信号处理器（没有人 pull sample），preroll buffer 永远不被消费，导致整个管道卡在 ASYNC 状态。添加 `async=false` 让 appsink 不参与异步状态转换，同时给 ai_sink 补上 `max-buffers=2 drop=true` 防止内存泄漏。
+
+### 涉及文件
+
+- `src/pipeline/gstreamer_pipeline.cpp` — appsink 添加 async=false + drop=true
+
+---
+
 ## [0.2.9] - 2026-03-21
 
 ### 修复

@@ -207,15 +207,17 @@ std::string GStreamerPipeline::build_pipeline_description(
     }
 
     // ── WebRTC branch: encode → h264parse → byte-stream appsink ──
+    // async=false: don't block pipeline PAUSED→PLAYING transition
+    // (nobody pulls samples from appsink during state change)
     ss << " t. ! queue max-size-buffers=3 leaky=downstream"
        << " ! " << encoder_desc
        << " ! h264parse config-interval=-1"
        << " ! video/x-h264,stream-format=byte-stream,alignment=au"
-       << " ! appsink name=webrtc_sink max-buffers=1 drop=true sync=false emit-signals=true";
+       << " ! appsink name=webrtc_sink max-buffers=1 drop=true sync=false async=false emit-signals=true";
 
     // ── AI branch: raw video appsink for Frame_Buffer_Pool ──
     ss << " t. ! queue max-size-buffers=2 leaky=downstream"
-       << " ! appsink name=ai_sink emit-signals=true sync=false";
+       << " ! appsink name=ai_sink max-buffers=2 drop=true sync=false async=false emit-signals=true";
 
     return ss.str();
 }

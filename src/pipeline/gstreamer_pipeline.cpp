@@ -389,16 +389,6 @@ VoidResult GStreamerPipeline::start() {
     // require the GMainLoop to be running)
     GstStateChangeReturn ret = gst_element_set_state(pipeline_.get(), GST_STATE_PLAYING);
 
-    // Wait for the state change to complete (kvssink needs time for credential
-    // fetch and stream setup). Timeout after 30 seconds.
-    if (ret == GST_STATE_CHANGE_ASYNC) {
-        GstState state, pending;
-        ret = gst_element_get_state(pipeline_.get(), &state, &pending,
-                                    30 * GST_SECOND);
-        std::cerr << "[GStreamerPipeline] Waited for ASYNC state change: ret="
-                  << ret << " state=" << state << " pending=" << pending << std::endl;
-    }
-
     lock.lock();
 
     if (ret == GST_STATE_CHANGE_FAILURE) {
@@ -416,7 +406,9 @@ VoidResult GStreamerPipeline::start() {
 
     state_ = State::PLAYING;
     std::cerr << "[GStreamerPipeline] Pipeline set to PLAYING (ret="
-              << ret << ", 1=SUCCESS, 2=ASYNC, 3=NO_PREROLL)" << std::endl;
+              << ret << ", 1=SUCCESS, 2=ASYNC)" << std::endl;
+    // ASYNC is normal — kvssink completes state transition asynchronously
+    // via the GMainLoop running on bus_thread_.
 
     return OkVoid();
 }

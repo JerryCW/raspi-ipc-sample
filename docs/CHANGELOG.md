@@ -1,5 +1,17 @@
 # 变更日志
 
+## [0.2.7] - 2026-03-21
+
+### 修复
+
+- **移除 `gst_element_get_state` 阻塞等待**：`gst_element_get_state` 阻塞调用线程 30 秒等待 PAUSED→PLAYING 转换，但 kvssink 的状态转换需要 GMainLoop 的 default context 被 iterate 才能完成。阻塞等待导致死锁——管道永远卡在 PAUSED。移除等待，让 ASYNC 状态转换通过 bus_thread_ 上的 GMainLoop 自然完成。
+
+### 涉及文件
+
+- `src/pipeline/gstreamer_pipeline.cpp` — 移除 gst_element_get_state 阻塞
+
+---
+
 ## [0.2.6] - 2026-03-21
 
 ### 修复

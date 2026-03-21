@@ -1,5 +1,17 @@
 # 变更日志
 
+## [0.3.1] - 2026-03-21
+
+### 修复
+
+- **主线程改用 `g_main_loop_run()` 替代 `g_main_context_iteration` 循环**：`g_main_context_iteration(ctx, FALSE)` 每次调用都 acquire/release default context，在间隙中其他线程可能抢占 context，导致 libcamerasrc 和 kvssink 的回调调度不稳定。改为直接在主线程跑 `g_main_loop_run()`（和 `gst-launch-1.0` 完全一致），用单独的 shutdown_watcher 线程监听信号并 `g_main_loop_quit`。
+
+### 涉及文件
+
+- `src/main.cpp` — 主事件循环改为 g_main_loop_run
+
+---
+
 ## [0.3.0] - 2026-03-21
 
 ### 修复

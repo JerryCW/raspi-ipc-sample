@@ -378,15 +378,24 @@ int main(int argc, char* argv[]) {
     std::cerr << "[init] All modules initialized — entering main loop" << std::endl;
 
     // ── Main event loop ─────────────────────────────────────
-    // Pump the GLib default main context so kvssink's async callbacks
-    // (credential refresh, putMedia, etc.) get dispatched. This is how
-    // gst-launch-1.0 works — the main thread runs g_main_context_iteration.
+    // Run GLib main loop on the main thread. This is required for kvssink
+    // and libcamerasrc to function — both depend on the default GMainContext
+    // being continuously iterated. This is exactly how gst-launch-1.0 works.
 #ifdef HAS_GSTREAMER
-    GMainContext* ctx = g_main_context_default();
-    while (!ShutdownHandler::shutdown_requested()) {
-        while (g_main_context_iteration(ctx, FALSE)) {}
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
+    GMainLoop* main_loop = g_main_loop_new(nullptr, FALSE);
+
+    // Watch for shutdown signal in a separate thread, then quit the loop
+    std::thread shutdown_watcher([&]() {
+        while (!ShutdownHandler::shutdown_requested()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        g_main_loop_quit(main_loop);
+    });
+
+    g_main_loop_run(main_loop);  // blocks until g_main_loop_quit
+
+    shutdown_watcher.join();
+    g_main_loop_unref(main_loop);
 #else
     while (!ShutdownHandler::shutdown_requested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

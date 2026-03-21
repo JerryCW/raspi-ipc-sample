@@ -1,5 +1,19 @@
 # 变更日志
 
+## [0.1.7] - 2026-03-21
+
+### 修复
+
+- **systemd watchdog 30 秒超时杀进程**：`WatchdogSec=30s` 在 `Type=simple` 下仍需 `sd_notify("WATCHDOG=1")` 心跳，未实现导致 30 秒后被 SIGABRT。暂时注释掉 `WatchdogSec`，待 sd_notify 集成后再启用。
+- **kvssink 在 systemd 环境下找不到 libKinesisVideoProducer.so**：`gst-plugin-scan` 加载 kvssink 时缺少 Producer SDK 的 .so 路径。添加 `LD_LIBRARY_PATH` 环境变量指向 SDK build 目录。
+- **ProtectHome=true 阻止读取 kvs-producer-sdk-cpp**：SDK .so 在 `/home/pi/` 下，`ProtectHome=true` 会阻止访问。改为 `ProtectHome=read-only`。
+
+### 涉及文件
+
+- `deploy/smart-camera.service`
+
+---
+
 ## [0.1.6] - 2026-03-21
 
 ### 修复

@@ -1,5 +1,17 @@
 # 变更日志
 
+## [0.1.6] - 2026-03-21
+
+### 修复
+
+- **kvssink 插件在 sudo/systemd 下找不到**：GStreamer 插件搜索路径在 sudo 环境下丢失，导致 `gst_element_factory_find("kvssink")` 返回 null。在 systemd service 文件中添加 `Environment=GST_PLUGIN_SYSTEM_PATH` 解决。
+
+### 涉及文件
+
+- `deploy/smart-camera.service`
+
+---
+
 ## [0.1.5] - 2026-03-21
 
 ### 修复

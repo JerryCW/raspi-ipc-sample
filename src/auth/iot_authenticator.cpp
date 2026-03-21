@@ -258,9 +258,13 @@ VoidResult IoTAuthenticator::validate_pem_and_chain() const {
     if (verify_result != 1) {
         int err = X509_STORE_CTX_get_error(ctx.get());
         std::string err_str = X509_verify_cert_error_string(err);
-        return ErrVoid(ErrorCode::CertificateInvalid,
-                       "Certificate chain verification failed: " + err_str,
-                       config_.cert_path);
+        // Local chain verification may fail for IoT device certs signed by
+        // intermediate CAs. This is expected — full chain verification happens
+        // server-side during mTLS handshake with AWS IoT Core.
+        // Log a warning but do NOT fail initialization.
+        std::cerr << "[WARNING] IoT_Authenticator: Local certificate chain "
+                  << "verification failed (this is normal for IoT device certs): "
+                  << err_str << std::endl;
     }
 #endif
 

@@ -1,5 +1,17 @@
 # 变更日志
 
+## [0.1.5] - 2026-03-21
+
+### 修复
+
+- **IoT 证书链验证过严**：AWS IoT 设备证书由中间 CA 签发，本地用 `AmazonRootCA1.pem`（根 CA）做 `X509_verify_cert` 即使加了 `X509_V_FLAG_PARTIAL_CHAIN` 也会失败。改为验证失败时记录 WARNING 而非拒绝启动，真正的链验证在 mTLS 握手时由 AWS IoT Core 服务端完成。
+
+### 涉及文件
+
+- `src/auth/iot_authenticator.cpp`
+
+---
+
 ## [0.1.4] - 2026-03-21
 
 ### 修复

@@ -1090,3 +1090,195 @@ TEST(GStreamerPipeline, AppsinkEmitSignalsDisabled) {
     ASSERT_TRUE(pipeline->destroy().is_ok());
 }
 #endif
+
+// ============================================================
+// Bus thread lifecycle tests
+// These tests target the GMainLoop + bus_thread_ lifecycle
+// introduced in start(). On the stub, they verify state machine
+// correctness. On real GStreamer, they exercise the thread
+// create/join/cleanup paths in start(), stop(), and destroy().
+// ============================================================
+
+// Verify that stop() after start() leaves pipeline in a state
+// where it can be started again — exercises bus_thread_ join
+// and GMainLoop teardown/recreation on real GStreamer.
+TEST(GStreamerPipeline, BusThread_StopThenRestartCreatesNewLoop) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+
+    // First cycle: start creates loop+thread, stop joins thread
+    ASSERT_TRUE(pipeline->start().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+    ASSERT_TRUE(pipeline->stop().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PAUSED);
+
+    // Second cycle: start must create a NEW loop+thread (old was joined)
+    ASSERT_TRUE(pipeline->start().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+    ASSERT_TRUE(pipeline->stop().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PAUSED);
+
+    // Third cycle: verify no resource leak from repeated create/join
+    ASSERT_TRUE(pipeline->start().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
+}
+
+// destroy() while PLAYING must quit the GMainLoop and join
+// bus_thread_ before freeing the pipeline. Verify no hang.
+TEST(GStreamerPipeline, BusThread_DestroyWhilePlayingCleansUpThread) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+
+    // destroy() directly from PLAYING — must handle loop+thread cleanup
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
+
+    // Verify pipeline is fully reusable after destroy-from-playing
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+}
+
+// Rapid start/stop exercises bus_thread_ join + recreation.
+// On real GStreamer, each start() creates a GMainLoop + thread,
+// and each stop() must quit + join before the next start().
+TEST(GStreamerPipeline, BusThread_RapidStartStopNoResourceLeak) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+    config.kvs_enabled = true;
+    config.kvs_stream_name = "bus-thread-test";
+    set_iot_fields(config);
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+
+    // 20 rapid cycles with KVS config — stresses the bus thread lifecycle
+    for (int i = 0; i < 20; ++i) {
+        ASSERT_TRUE(pipeline->start().is_ok())
+            << "start() failed on cycle " << i;
+        ASSERT_TRUE(pipeline->stop().is_ok())
+            << "stop() failed on cycle " << i;
+    }
+
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
+}
+
+// stop() when already PAUSED should not try to quit/join a
+// GMainLoop that was already torn down in the previous stop().
+TEST(GStreamerPipeline, BusThread_DoubleStopDoesNotDoubleJoin) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+
+    // First stop: quits loop, joins thread
+    ASSERT_TRUE(pipeline->stop().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PAUSED);
+
+    // Second stop: loop_ is already null, thread already joined
+    // Must not crash or hang
+    auto result = pipeline->stop();
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PAUSED);
+
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+}
+
+// destroy() after stop() — loop_ already cleaned up by stop(),
+// destroy() should handle the null loop_ gracefully.
+TEST(GStreamerPipeline, BusThread_DestroyAfterStopHandlesNullLoop) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+    ASSERT_TRUE(pipeline->stop().is_ok());
+
+    // stop() already cleaned up loop_ and bus_thread_
+    // destroy() must not double-free or crash
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
+}
+
+// Concurrent state reads while start() is creating the bus thread.
+// On real GStreamer, start() releases the lock before set_state()
+// and reacquires after — readers must see consistent state.
+TEST(GStreamerPipeline, BusThread_ConcurrentReadsWhileStarting) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+    config.kvs_enabled = true;
+    config.kvs_stream_name = "concurrent-test";
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+
+    std::atomic<bool> stop_flag{false};
+    std::vector<std::thread> readers;
+
+    for (int i = 0; i < 4; ++i) {
+        readers.emplace_back([&pipeline, &stop_flag]() {
+            while (!stop_flag.load(std::memory_order_relaxed)) {
+                auto state = pipeline->current_state();
+                EXPECT_TRUE(
+                    state == IGStreamerPipeline::State::READY ||
+                    state == IGStreamerPipeline::State::PLAYING ||
+                    state == IGStreamerPipeline::State::PAUSED ||
+                    state == IGStreamerPipeline::State::NULL_STATE);
+            }
+        });
+    }
+
+    // Multiple start/stop cycles while readers are active
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_TRUE(pipeline->start().is_ok());
+        ASSERT_TRUE(pipeline->stop().is_ok());
+    }
+
+    stop_flag.store(true, std::memory_order_relaxed);
+    for (auto& t : readers) t.join();
+
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+}
+
+// Destructor must clean up even if pipeline is still PLAYING.
+// On real GStreamer, the destructor should handle loop+thread
+// cleanup (or delegate to destroy()). This test verifies no hang.
+TEST(GStreamerPipeline, BusThread_DestructorCleansUpFromPlaying) {
+    {
+        auto pipeline = create_gstreamer_pipeline();
+        PipelineConfig config;
+        config.source_type = CameraSourceType::VIDEOTESTSRC;
+        config.video_preset = PRESET_DEFAULT;
+
+        ASSERT_TRUE(pipeline->build(config).is_ok());
+        ASSERT_TRUE(pipeline->start().is_ok());
+        EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+
+        // pipeline goes out of scope here — destructor runs
+        // On real GStreamer, must quit loop + join thread + unref
+    }
+    // If we reach here without hanging, cleanup succeeded
+    SUCCEED();
+}

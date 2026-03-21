@@ -178,7 +178,8 @@ std::string GStreamerPipeline::build_pipeline_description(
 
     // ── KVS branch: encode → h264parse → kvssink ──
     // kvssink handles byte-stream H.264 directly (no avc conversion needed).
-    // iot-certificate is set programmatically in build() after gst_parse_launch.
+    // iot-certificate is set inline using GstStructure serialization format —
+    // this works with gst_parse_launch (proven by gst-launch-1.0 testing).
     if (config.kvs_enabled && !config.kvs_stream_name.empty()) {
         ss << " t. ! queue max-size-buffers=3 leaky=downstream"
            << " ! " << encoder_desc
@@ -189,6 +190,17 @@ std::string GStreamerPipeline::build_pipeline_description(
            << " aws-region=" << config.kvs_region
            << " frame-timecodes=true"
            << " retention-period=" << config.kvs_retention_hours;
+        // Append iot-certificate if IoT credentials are configured
+        if (!config.iot_credential_endpoint.empty()) {
+            ss << " iot-certificate=\"iot-certificate"
+               << ", iot-thing-name=(string)" << config.iot_thing_name
+               << ", endpoint=(string)" << config.iot_credential_endpoint
+               << ", cert-path=(string)" << config.iot_cert_path
+               << ", key-path=(string)" << config.iot_key_path
+               << ", ca-path=(string)" << config.iot_ca_path
+               << ", role-aliases=(string)" << config.iot_role_alias
+               << "\"";
+        }
     } else {
         ss << " t. ! queue max-size-buffers=3 leaky=downstream"
            << " ! fakesink name=kvs_sink sync=false";
@@ -289,26 +301,8 @@ VoidResult GStreamerPipeline::build(const PipelineConfig& config) {
             GST_BIN(raw_pipeline), encoder_name_);
     }
 
-    // Set iot-certificate on kvssink via gst_structure_new (NOT gst_structure_from_string)
-    // This matches the proven pattern from ipc-kvs-demo.
-    if (config.kvs_enabled && !config.iot_credential_endpoint.empty()
-        && GST_IS_BIN(raw_pipeline)) {
-        GstElement* kvs_sink = find_element_by_factory(
-            GST_BIN(raw_pipeline), "kvssink");
-        if (kvs_sink) {
-            GstStructure* iot_creds = gst_structure_new(
-                "iot-certificate",
-                "iot-thing-name", G_TYPE_STRING, config.iot_thing_name.c_str(),
-                "endpoint", G_TYPE_STRING, config.iot_credential_endpoint.c_str(),
-                "cert-path", G_TYPE_STRING, config.iot_cert_path.c_str(),
-                "key-path", G_TYPE_STRING, config.iot_key_path.c_str(),
-                "ca-path", G_TYPE_STRING, config.iot_ca_path.c_str(),
-                "role-aliases", G_TYPE_STRING, config.iot_role_alias.c_str(),
-                NULL);
-            g_object_set(G_OBJECT(kvs_sink), "iot-certificate", iot_creds, NULL);
-            gst_structure_free(iot_creds);
-        }
-    }
+    // iot-certificate is now set inline in the pipeline description string
+    // (GstStructure serialization format works with gst_parse_launch)
 
     state_ = State::READY;
     return OkVoid();

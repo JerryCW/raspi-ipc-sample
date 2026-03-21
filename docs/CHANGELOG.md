@@ -1,5 +1,21 @@
 # 变更日志
 
+## [0.2.6] - 2026-03-21
+
+### 修复
+
+- **iot-certificate 改回 gst_parse_launch 内联设置**：`gst-launch-1.0` 测试证实 kvssink 的 `iot-certificate` 属性可以通过 GstStructure 序列化格式在 parse 字符串中设置（`iot-certificate="iot-certificate, iot-thing-name=(string)xxx, ..."`）。之前用 `gst_structure_new` + `g_object_set` 的方式虽然在 READY→PAUSED 时 credential fetch 成功了，但帧不流。改为内联设置后与 `gst-launch-1.0` 的行为完全一致。移除了 post-parse 的 `g_object_set` 代码。
+
+### 验证
+
+- `sudo gst-launch-1.0` 用相同管道描述成功上传视频到 KVS：15fps, 2062 Kbps, RECEIVED + PERSISTED ACK 确认。
+
+### 涉及文件
+
+- `src/pipeline/gstreamer_pipeline.cpp` — iot-certificate 内联到 pipeline description
+
+---
+
 ## [0.2.5] - 2026-03-21
 
 ### 修复

@@ -840,3 +840,224 @@ TEST(GStreamerPipeline, StartWithKvsConfig_FullCycle) {
     ASSERT_TRUE(pipeline->destroy().is_ok());
     EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
 }
+
+// ============================================================
+// Additional edge-case tests for coverage gaps
+// ============================================================
+
+// stop() from READY state — stub transitions to PAUSED
+TEST(GStreamerPipeline, StopFromReadySucceeds) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+
+    auto result = pipeline->stop();
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PAUSED);
+}
+
+// build() called again while already in READY state (no destroy first)
+// The stub overwrites state — verifies no crash or resource leak
+TEST(GStreamerPipeline, DoubleBuildWithoutDestroy) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+
+    // Second build with different preset — should succeed
+    config.video_preset = PRESET_HD;
+    auto result = pipeline->build(config);
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+    EXPECT_FALSE(pipeline->encoder_name().empty());
+}
+
+// destroy() from PAUSED state
+TEST(GStreamerPipeline, DestroyFromPausedSucceeds) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+    ASSERT_TRUE(pipeline->stop().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PAUSED);
+
+    auto result = pipeline->destroy();
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
+    EXPECT_TRUE(pipeline->encoder_name().empty());
+}
+
+// set_bitrate(0) — zero bitrate edge case
+TEST(GStreamerPipeline, SetBitrateZeroSucceeds) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    auto result = pipeline->set_bitrate(0);
+    EXPECT_TRUE(result.is_ok());
+}
+
+// set_bitrate with very large value
+TEST(GStreamerPipeline, SetBitrateLargeValueSucceeds) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    auto result = pipeline->set_bitrate(100000);
+    EXPECT_TRUE(result.is_ok());
+}
+
+// build() stores config — verify encoder_name reflects stub
+TEST(GStreamerPipeline, BuildStoresConfigAndSetsStubEncoder) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_LOW_BW;
+    config.prefer_hw_encoder = false;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+#ifndef HAS_GSTREAMER
+    EXPECT_EQ(pipeline->encoder_name(), "stub");
+#endif
+}
+
+// Multiple destroy calls are idempotent
+TEST(GStreamerPipeline, MultipleDestroysAreIdempotent) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+
+    EXPECT_TRUE(pipeline->destroy().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
+
+    // Second and third destroy should also succeed
+    EXPECT_TRUE(pipeline->destroy().is_ok());
+    EXPECT_TRUE(pipeline->destroy().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
+}
+
+// Full lifecycle with all camera source types in config
+TEST(GStreamerPipeline, BuildWithV4L2SourceType) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::V4L2_USB;
+    config.device_path = "/dev/video0";
+    config.video_preset = PRESET_DEFAULT;
+
+    // Stub mode: build always succeeds regardless of source type
+    auto result = pipeline->build(config);
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+}
+
+TEST(GStreamerPipeline, BuildWithLibcameraSourceType) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::LIBCAMERA_CSI;
+    config.video_preset = PRESET_DEFAULT;
+
+    auto result = pipeline->build(config);
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+}
+
+// Concurrent build + state reads — verify no data race
+TEST(GStreamerPipeline, ConcurrentBuildAndStateReads) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    std::atomic<bool> stop_readers{false};
+    std::vector<std::thread> readers;
+
+    for (int i = 0; i < 4; ++i) {
+        readers.emplace_back([&pipeline, &stop_readers]() {
+            while (!stop_readers.load(std::memory_order_relaxed)) {
+                auto state = pipeline->current_state();
+                EXPECT_TRUE(
+                    state == IGStreamerPipeline::State::NULL_STATE ||
+                    state == IGStreamerPipeline::State::READY ||
+                    state == IGStreamerPipeline::State::PLAYING ||
+                    state == IGStreamerPipeline::State::PAUSED);
+                auto enc = pipeline->encoder_name();
+                (void)enc;
+            }
+        });
+    }
+
+    // Build, start, stop, destroy while readers are active
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->start().is_ok());
+    ASSERT_TRUE(pipeline->stop().is_ok());
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+
+    stop_readers.store(true, std::memory_order_relaxed);
+    for (auto& t : readers) t.join();
+
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
+}
+
+// Start from READY after stop (READY → start → stop → start)
+// Verifies the PAUSED → PLAYING transition works after a stop
+TEST(GStreamerPipeline, StartAfterStopFromReady) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    // stop from READY → PAUSED
+    ASSERT_TRUE(pipeline->stop().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PAUSED);
+
+    // start from PAUSED → PLAYING
+    ASSERT_TRUE(pipeline->start().is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::PLAYING);
+
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+}
+
+// Build with custom GOP size
+TEST(GStreamerPipeline, BuildWithCustomGopSize) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+    config.gop_size = 60;  // Custom GOP instead of matching fps
+
+    auto result = pipeline->build(config);
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+}
+
+// Build with custom WebRTC queue size
+TEST(GStreamerPipeline, BuildWithCustomWebrtcQueueSize) {
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+    config.webrtc_queue_size = 10;
+
+    auto result = pipeline->build(config);
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+}

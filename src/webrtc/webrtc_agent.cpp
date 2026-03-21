@@ -5,6 +5,10 @@
 #include <sstream>
 #include <thread>
 
+#ifdef HAS_KVS_WEBRTC_SDK
+#include <com/amazonaws/kinesis/video/webrtcclient/Include.h>
+#endif
+
 namespace sc {
 
 // ============================================================
@@ -258,8 +262,6 @@ void WebRTCAgent::shutdown_sequence() {
 }
 
 #else  // HAS_KVS_WEBRTC_SDK defined — real implementation
-
-#include <com/amazonaws/kinesis/video/webrtcclient/Include.h>
 
 WebRTCAgent::WebRTCAgent() = default;
 

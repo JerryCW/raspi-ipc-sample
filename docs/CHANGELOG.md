@@ -1,5 +1,17 @@
 # 变更日志
 
+## [0.1.4] - 2026-03-21
+
+### 修复
+
+- **GCC 12 命名空间污染**：WebRTC SDK 头文件 `Include.h` 被放在 `namespace sc { }` 内部 include，导致 `std::abs`、`std::string` 等标准库符号被解析为 `sc::std::abs`，引发大量编译错误。将 SDK include 移到文件顶部、namespace 之外。
+
+### 涉及文件
+
+- `src/webrtc/webrtc_agent.cpp`
+
+---
+
 ## [0.1.3] - 2026-03-21
 
 ### 修复

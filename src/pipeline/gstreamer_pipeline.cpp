@@ -365,20 +365,14 @@ VoidResult GStreamerPipeline::start() {
     }
 
     // Create GMainLoop for bus message dispatching
-    // (required by kvssink for async credential refresh and putMedia callbacks)
-    loop_ = g_main_loop_new(nullptr, FALSE);
+    // NOTE: We do NOT start a bus_thread_ here. The main thread in main.cpp
+    // pumps the default GMainContext via g_main_context_iteration().
+    // kvssink needs the default context to be iterated for its async callbacks.
 
-    // Attach bus watch
+    // Attach bus watch to default context
     GstBus* bus = gst_element_get_bus(pipeline_.get());
     gst_bus_add_watch(bus, bus_callback, this);
     gst_object_unref(bus);
-
-    // Start GMainLoop BEFORE set_state(PLAYING) — kvssink needs the loop
-    // running to dispatch its async credential/connection callbacks during
-    // the state transition.
-    bus_thread_ = std::thread([this]() {
-        g_main_loop_run(loop_);
-    });
 
     // Release lock before set_state — kvssink's state change may trigger
     // callbacks on the bus thread that could interact with our state.
@@ -392,12 +386,6 @@ VoidResult GStreamerPipeline::start() {
     lock.lock();
 
     if (ret == GST_STATE_CHANGE_FAILURE) {
-        g_main_loop_quit(loop_);
-        lock.unlock();
-        if (bus_thread_.joinable()) bus_thread_.join();
-        lock.lock();
-        g_main_loop_unref(loop_);
-        loop_ = nullptr;
         state_ = State::ERROR;
         return ErrVoid(ErrorCode::PipelineStateChangeFailed,
                        "Failed to set pipeline to PLAYING state",
@@ -408,7 +396,7 @@ VoidResult GStreamerPipeline::start() {
     std::cerr << "[GStreamerPipeline] Pipeline set to PLAYING (ret="
               << ret << ", 1=SUCCESS, 2=ASYNC)" << std::endl;
     // ASYNC is normal — kvssink completes state transition asynchronously
-    // via the GMainLoop running on bus_thread_.
+    // via the default GMainContext pumped by main().
 
     return OkVoid();
 }
@@ -440,22 +428,6 @@ VoidResult GStreamerPipeline::stop() {
     }
 
     state_ = State::PAUSED;
-
-    // Quit GMainLoop so bus thread can join
-    if (loop_) {
-        g_main_loop_quit(loop_);
-    }
-    // Must release lock before joining bus_thread_ (it may call bus_callback which logs)
-    lock.unlock();
-    if (bus_thread_.joinable()) {
-        bus_thread_.join();
-    }
-    lock.lock();
-    if (loop_) {
-        g_main_loop_unref(loop_);
-        loop_ = nullptr;
-    }
-
     return OkVoid();
 }
 
@@ -465,18 +437,6 @@ VoidResult GStreamerPipeline::stop() {
 
 VoidResult GStreamerPipeline::destroy() {
     std::unique_lock lock(mutex_);
-
-    // Stop GMainLoop if still running
-    if (loop_) {
-        g_main_loop_quit(loop_);
-        lock.unlock();
-        if (bus_thread_.joinable()) {
-            bus_thread_.join();
-        }
-        lock.lock();
-        g_main_loop_unref(loop_);
-        loop_ = nullptr;
-    }
 
     encoder_element_ = nullptr;
     pipeline_.reset();  // RAII: sets state to NULL and unrefs

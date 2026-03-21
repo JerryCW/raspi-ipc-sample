@@ -1,5 +1,18 @@
 # 变更日志
 
+## [0.2.9] - 2026-03-21
+
+### 修复
+
+- **移除 bus_thread_ GMainLoop，只靠主线程 pump default context**：bus_thread_ 的 `g_main_loop_run()` 和主线程的 `g_main_context_iteration()` 竞争同一个 default GMainContext 的 ownership，导致主线程拿不到 context，kvssink 的异步回调仍然无法被调度。移除 bus_thread_ 和 GMainLoop，只保留 `gst_bus_add_watch` 注册到 default context，由主线程的 `g_main_context_iteration` 统一 pump。
+
+### 涉及文件
+
+- `include/pipeline/gstreamer_pipeline.h` — 移除 GMainLoop/bus_thread_ 成员
+- `src/pipeline/gstreamer_pipeline.cpp` — start/stop/destroy 简化
+
+---
+
 ## [0.2.8] - 2026-03-21
 
 ### 修复

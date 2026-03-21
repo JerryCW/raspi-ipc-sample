@@ -1,5 +1,18 @@
 # 变更日志
 
+## [0.1.2] - 2026-03-21
+
+### 修复
+
+- **CMake 语法错误**：`message()` 中误用了 bash 变量展开语法 `${VAR:+...}`，CMake 不支持冒号字符，导致树莓派上配置失败。
+- **WebRTC SDK 链接失败**：手动路径检测找到 SDK 后，webrtc_agent 仍尝试链接不存在的 `KVSWebRTC::KVSWebRTC` imported target。改为先检查 imported target 是否存在，不存在则用 `find_library` 找到的实际库路径链接。
+
+### 涉及文件
+
+- `CMakeLists.txt`
+
+---
+
 ## [0.1.1] - 2026-03-21
 
 ### 修复

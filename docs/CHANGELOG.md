@@ -1,5 +1,23 @@
 # 变更日志
 
+## [0.2.1] - 2026-03-21
+
+### 修复
+
+- **kvssink `iot-certificate` 属性设置失败**：`iot-certificate` 是 `GstStructure` 类型属性，不能通过 `gst_parse_launch` 字符串语法设置。之前将其作为引号字符串嵌入管道描述，导致树莓派上 `could not set property "iot-certificate"` 错误并崩溃重启。改为：管道描述中省略该属性，解析后通过 `find_element_by_factory("kvssink")` 获取元素引用，再用 `gst_structure_from_string()` + `g_object_set()` 程序化设置。
+- **`build_iot_certificate_string` 格式改为 GstStructure 序列化格式**：从 `iot-thing-name=xxx,endpoint=xxx,...` 改为 `iot-certificate, iot-thing-name=(string)xxx, endpoint=(string)xxx, ...`，兼容 `gst_structure_from_string()` 解析。
+
+### 涉及文件
+
+- `src/pipeline/gstreamer_pipeline.cpp` — 移除 parse 字符串中的 iot-certificate，改为 post-parse g_object_set
+- `src/stream/stream_uploader.cpp` — GstStructure 序列化格式
+- `include/stream/stream_uploader.h` — 注释更新
+- `tests/test_stream_uploader.cpp` — 测试适配新格式
+- `tests/test_gstreamer_pipeline.cpp` — 新增 KVS 配置字段测试
+- `.kiro/steering/tech.md` — 更新 gotcha 说明
+
+---
+
 ## [0.2.0] - 2026-03-21
 
 ### 新功能

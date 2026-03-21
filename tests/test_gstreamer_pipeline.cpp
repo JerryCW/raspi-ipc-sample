@@ -515,3 +515,112 @@ TEST(GStreamerPipeline, FullLifecycleWithKvsConfig) {
     ASSERT_TRUE(pipeline->destroy().is_ok());
     EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::NULL_STATE);
 }
+
+// ============================================================
+// KVS iot-certificate edge cases
+// The iot-certificate is a GstStructure property that cannot be
+// set via gst_parse_launch. It must be set programmatically
+// via g_object_set after pipeline creation. These tests verify
+// the various config combinations around this behavior.
+// ============================================================
+
+TEST(GStreamerPipeline, BuildWithKvsEnabled_EmptyIotCertificate_Succeeds) {
+    // KVS enabled with stream name but no iot-certificate — should still build
+    // (iot-certificate is set post-parse only when non-empty)
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+    config.kvs_enabled = true;
+    config.kvs_stream_name = "test-stream";
+    config.kvs_iot_certificate = "";  // empty — skip post-parse step
+
+    auto result = pipeline->build(config);
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+}
+
+TEST(GStreamerPipeline, BuildWithKvsEnabled_EmptyStreamName_UsesFakesink) {
+    // KVS enabled but empty stream name — should fall through to fakesink branch
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+    config.kvs_enabled = true;
+    config.kvs_stream_name = "";  // empty → fakesink path
+    config.kvs_iot_certificate = "iot-thing-name=cam,endpoint=ep,cert-path=/c,key-path=/k,ca-path=/ca,role-aliases=role";
+
+    auto result = pipeline->build(config);
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+}
+
+TEST(GStreamerPipeline, BuildWithKvsDisabled_IotCertificateIgnored) {
+    // KVS disabled — iot-certificate should be completely ignored
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+    config.kvs_enabled = false;
+    config.kvs_stream_name = "some-stream";
+    config.kvs_iot_certificate = "iot-thing-name=cam,endpoint=ep,cert-path=/c,key-path=/k,ca-path=/ca,role-aliases=role";
+
+    auto result = pipeline->build(config);
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+}
+
+TEST(GStreamerPipeline, BuildWithKvsEnabled_CustomStorageAndRetention) {
+    // Verify non-default storage-size and retention values are accepted
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+    config.kvs_enabled = true;
+    config.kvs_stream_name = "custom-stream";
+    config.kvs_iot_certificate = "iot-thing-name=cam,endpoint=ep,cert-path=/c,key-path=/k,ca-path=/ca,role-aliases=role";
+    config.kvs_storage_size_mb = 64;    // smaller than default 128
+    config.kvs_retention_hours = 24;    // 1 day instead of 7
+
+    auto result = pipeline->build(config);
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+}
+
+TEST(GStreamerPipeline, RebuildWithDifferentKvsConfig) {
+    // Build with KVS enabled, destroy, rebuild with KVS disabled
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+    config.kvs_enabled = true;
+    config.kvs_stream_name = "first-stream";
+    config.kvs_iot_certificate = "iot-thing-name=cam,endpoint=ep,cert-path=/c,key-path=/k,ca-path=/ca,role-aliases=role";
+
+    ASSERT_TRUE(pipeline->build(config).is_ok());
+    ASSERT_TRUE(pipeline->destroy().is_ok());
+
+    // Rebuild with KVS disabled
+    config.kvs_enabled = false;
+    config.kvs_stream_name = "";
+    config.kvs_iot_certificate = "";
+
+    auto result = pipeline->build(config);
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+}
+
+TEST(GStreamerPipeline, BuildWithKvsEnabled_CustomBufferDuration) {
+    // Verify custom kvs_buffer_duration_ms is accepted
+    auto pipeline = create_gstreamer_pipeline();
+    PipelineConfig config;
+    config.source_type = CameraSourceType::VIDEOTESTSRC;
+    config.video_preset = PRESET_DEFAULT;
+    config.kvs_enabled = true;
+    config.kvs_stream_name = "buffered-stream";
+    config.kvs_buffer_duration_ms = 5000;  // 5 seconds instead of default 2
+
+    auto result = pipeline->build(config);
+    EXPECT_TRUE(result.is_ok());
+    EXPECT_EQ(pipeline->current_state(), IGStreamerPipeline::State::READY);
+}

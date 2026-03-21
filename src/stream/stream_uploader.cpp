@@ -17,18 +17,22 @@ std::unique_ptr<IStreamUploader> create_stream_uploader() {
 
 // ============================================================
 // build_iot_certificate_string — format for kvssink iot-certificate property
-// Format: comma-separated key=value
-// "iot-thing-name=xxx,endpoint=xxx,cert-path=xxx,key-path=xxx,ca-path=xxx,role-aliases=xxx"
+// Format: GstStructure serialization string
+// "iot-certificate, iot-thing-name=(string)xxx, endpoint=(string)xxx, ..."
+// NOTE: iot-certificate is a GstStructure property on kvssink — it cannot
+// be set via gst_parse_launch string syntax. The pipeline build() method
+// uses gst_structure_from_string() with this output, then g_object_set().
 // ============================================================
 
 std::string StreamUploader::build_iot_certificate_string(const IoTCertConfig& iot_config) {
     std::ostringstream ss;
-    ss << "iot-thing-name=" << iot_config.thing_name
-       << ",endpoint=" << iot_config.credential_endpoint
-       << ",cert-path=" << iot_config.cert_path
-       << ",key-path=" << iot_config.key_path
-       << ",ca-path=" << iot_config.root_ca_path
-       << ",role-aliases=" << iot_config.role_alias;
+    ss << "iot-certificate"
+       << ", iot-thing-name=(string)" << iot_config.thing_name
+       << ", endpoint=(string)" << iot_config.credential_endpoint
+       << ", cert-path=(string)" << iot_config.cert_path
+       << ", key-path=(string)" << iot_config.key_path
+       << ", ca-path=(string)" << iot_config.root_ca_path
+       << ", role-aliases=(string)" << iot_config.role_alias;
     return ss.str();
 }
 

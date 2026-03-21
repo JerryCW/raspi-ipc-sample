@@ -183,16 +183,18 @@ std::string GStreamerPipeline::build_pipeline_description(
     ss << " ! tee name=t";
 
     // KVS branch: kvssink if enabled, otherwise fakesink placeholder
+    // NOTE: iot-certificate is a GstStructure property — it CANNOT be set via
+    // gst_parse_launch string syntax. It must be set programmatically via
+    // g_object_set after pipeline creation. See build() for the post-parse step.
     if (config.kvs_enabled && !config.kvs_stream_name.empty()) {
         // kvssink requires stream-format=avc, so add h264parse to convert
         ss << " t. ! queue max-size-time=" << (config.kvs_buffer_duration_ms * 1000000ULL)
            << " leaky=0"
            << " ! h264parse"
            << " ! video/x-h264,stream-format=avc,alignment=au"
-           << " ! kvssink stream-name=\"" << config.kvs_stream_name << "\""
+           << " ! kvssink name=kvs_sink stream-name=\"" << config.kvs_stream_name << "\""
            << " storage-size=" << config.kvs_storage_size_mb
-           << " retention-period=" << config.kvs_retention_hours
-           << " iot-certificate=\"" << config.kvs_iot_certificate << "\"";
+           << " retention-period=" << config.kvs_retention_hours;
     } else {
         ss << " t. ! queue max-size-time=" << (config.kvs_buffer_duration_ms * 1000000ULL)
            << " leaky=0"
@@ -286,6 +288,27 @@ VoidResult GStreamerPipeline::build(const PipelineConfig& config) {
     if (GST_IS_BIN(raw_pipeline)) {
         encoder_element_ = find_element_by_factory(
             GST_BIN(raw_pipeline), encoder_name_);
+    }
+
+    // Set iot-certificate on kvssink as GstStructure (cannot be set via gst_parse_launch)
+    if (config.kvs_enabled && !config.kvs_iot_certificate.empty()
+        && GST_IS_BIN(raw_pipeline)) {
+        GstElement* kvs_sink = find_element_by_factory(
+            GST_BIN(raw_pipeline), "kvssink");
+        if (kvs_sink) {
+            GstStructure* iot_cert = gst_structure_from_string(
+                config.kvs_iot_certificate.c_str(), nullptr);
+            if (iot_cert) {
+                g_object_set(kvs_sink, "iot-certificate", iot_cert, nullptr);
+                gst_structure_free(iot_cert);
+            } else {
+                state_ = State::ERROR;
+                return ErrVoid(ErrorCode::PipelineBuildFailed,
+                               "Failed to parse iot-certificate GstStructure from: "
+                                   + config.kvs_iot_certificate,
+                               "GStreamerPipeline::build");
+            }
+        }
     }
 
     state_ = State::READY;

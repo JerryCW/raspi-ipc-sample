@@ -10,6 +10,10 @@
 #include <string>
 #include <thread>
 
+#ifdef HAS_GSTREAMER
+#include <glib.h>
+#endif
+
 #include "ai/ai_pipeline.h"
 #include "auth/iot_authenticator.h"
 #include "buffer/frame_buffer_pool.h"
@@ -374,9 +378,20 @@ int main(int argc, char* argv[]) {
     std::cerr << "[init] All modules initialized — entering main loop" << std::endl;
 
     // ── Main event loop ─────────────────────────────────────
+    // Pump the GLib default main context so kvssink's async callbacks
+    // (credential refresh, putMedia, etc.) get dispatched. This is how
+    // gst-launch-1.0 works — the main thread runs g_main_context_iteration.
+#ifdef HAS_GSTREAMER
+    GMainContext* ctx = g_main_context_default();
+    while (!ShutdownHandler::shutdown_requested()) {
+        while (g_main_context_iteration(ctx, FALSE)) {}
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+#else
     while (!ShutdownHandler::shutdown_requested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
+#endif
 
     // ── Graceful shutdown ───────────────────────────────────
     log_mgr->log(LogLevel::INFO, "main", "Shutdown requested — initiating graceful shutdown");

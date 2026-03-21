@@ -1,5 +1,17 @@
 # 变更日志
 
+## [0.2.8] - 2026-03-21
+
+### 修复
+
+- **主线程 pump GMainContext 解决 kvssink ASYNC 死锁**：kvssink 的 PAUSED→PLAYING 状态转换和 putMedia 回调都注册在 GLib default GMainContext 上。之前主线程只是 `sleep(200ms)` 循环，default context 从未被 iterate，导致 kvssink 的异步回调永远不被调度。`gst-launch-1.0` 能工作是因为它在主线程跑 `g_main_loop_run()` 来 pump default context。改为在主事件循环中用 `g_main_context_iteration(ctx, FALSE)` 非阻塞 iterate，匹配 `gst-launch-1.0` 的行为。
+
+### 涉及文件
+
+- `src/main.cpp` — 主事件循环改为 pump GMainContext（HAS_GSTREAMER 条件编译）
+
+---
+
 ## [0.2.7] - 2026-03-21
 
 ### 修复

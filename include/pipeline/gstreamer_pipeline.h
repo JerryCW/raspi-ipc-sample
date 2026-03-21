@@ -5,6 +5,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <thread>
 
 #include "config/config_manager.h"
 #include "core/stream_mode.h"
@@ -133,6 +134,13 @@ private:
 
     GstPipelinePtr pipeline_;
     GstElement* encoder_element_ = nullptr;  // non-owning, owned by pipeline
+
+    // GMainLoop for bus message dispatching (required by kvssink async callbacks)
+    GMainLoop* loop_ = nullptr;
+    std::thread bus_thread_;
+
+    // Bus callback for error/warning/EOS handling
+    static gboolean bus_callback(GstBus* bus, GstMessage* msg, gpointer data);
 
     // Build helpers
     VoidResult select_encoder(std::string& pipeline_desc) const;

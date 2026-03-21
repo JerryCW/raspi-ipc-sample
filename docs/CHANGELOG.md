@@ -1,5 +1,18 @@
 # 变更日志
 
+## [0.2.3] - 2026-03-21
+
+### 修复
+
+- **KVS 管道无视频上传（GMainLoop 缺失）**：`gst-launch-1.0` 测试确认 libcamerasrc → x264enc → fakesink 链路正常出帧，但 smart-camera 进程中管道静默不动。根因：kvssink 依赖 GLib 事件循环（GMainLoop）来调度异步回调（credential refresh、putMedia、bus 消息等），我们的 `start()` 只调用了 `gst_element_set_state(PLAYING)` 但没有启动 GMainLoop，导致 kvssink 内部回调无法被调度，帧无法流入。参考 ipc-kvs-demo 的 `start()` 实现，添加 `g_main_loop_new` + `gst_bus_add_watch` + 专用 bus thread 跑 `g_main_loop_run`。`stop()` 和 `destroy()` 中正确 quit/join/unref。
+
+### 涉及文件
+
+- `include/pipeline/gstreamer_pipeline.h` — 新增 `GMainLoop*`、`std::thread bus_thread_`、`bus_callback` 成员
+- `src/pipeline/gstreamer_pipeline.cpp` — start/stop/destroy 集成 GMainLoop + bus watch
+
+---
+
 ## [0.2.2] - 2026-03-21
 
 ### 修复

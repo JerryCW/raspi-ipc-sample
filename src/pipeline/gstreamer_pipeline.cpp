@@ -2,6 +2,7 @@
 
 #include <iostream>
 #include <sstream>
+#include <thread>
 
 namespace sc {
 
@@ -314,7 +315,45 @@ VoidResult GStreamerPipeline::build(const PipelineConfig& config) {
 }
 
 // ------------------------------------------------------------
-// start()
+// Bus callback — handles error/warning/EOS from pipeline
+// ------------------------------------------------------------
+
+gboolean GStreamerPipeline::bus_callback(GstBus* /*bus*/, GstMessage* msg, gpointer data) {
+    auto* self = static_cast<GStreamerPipeline*>(data);
+
+    switch (GST_MESSAGE_TYPE(msg)) {
+    case GST_MESSAGE_ERROR: {
+        GError* err = nullptr;
+        gchar* debug_info = nullptr;
+        gst_message_parse_error(msg, &err, &debug_info);
+        std::cerr << "[GStreamerPipeline] ERROR: " << (err->message ? err->message : "unknown");
+        if (debug_info) std::cerr << " [" << debug_info << "]";
+        std::cerr << std::endl;
+        self->state_ = State::ERROR;
+        g_error_free(err);
+        g_free(debug_info);
+        break;
+    }
+    case GST_MESSAGE_WARNING: {
+        GError* warn = nullptr;
+        gchar* debug_info = nullptr;
+        gst_message_parse_warning(msg, &warn, &debug_info);
+        std::cerr << "[GStreamerPipeline] WARNING: " << (warn->message ? warn->message : "unknown") << std::endl;
+        g_error_free(warn);
+        g_free(debug_info);
+        break;
+    }
+    case GST_MESSAGE_EOS:
+        std::cerr << "[GStreamerPipeline] End-of-stream" << std::endl;
+        break;
+    default:
+        break;
+    }
+    return TRUE;
+}
+
+// ------------------------------------------------------------
+// start() — set PLAYING + start GMainLoop for bus dispatching
 // ------------------------------------------------------------
 
 VoidResult GStreamerPipeline::start() {
@@ -331,8 +370,20 @@ VoidResult GStreamerPipeline::start() {
                        "GStreamerPipeline::start");
     }
 
+    // Create GMainLoop for bus message dispatching
+    // (required by kvssink for async credential refresh and putMedia callbacks)
+    loop_ = g_main_loop_new(nullptr, FALSE);
+
+    // Attach bus watch
+    GstBus* bus = gst_element_get_bus(pipeline_.get());
+    gst_bus_add_watch(bus, bus_callback, this);
+    gst_object_unref(bus);
+
+    // Set pipeline to PLAYING
     GstStateChangeReturn ret = gst_element_set_state(pipeline_.get(), GST_STATE_PLAYING);
     if (ret == GST_STATE_CHANGE_FAILURE) {
+        g_main_loop_unref(loop_);
+        loop_ = nullptr;
         state_ = State::ERROR;
         return ErrVoid(ErrorCode::PipelineStateChangeFailed,
                        "Failed to set pipeline to PLAYING state",
@@ -340,6 +391,12 @@ VoidResult GStreamerPipeline::start() {
     }
 
     state_ = State::PLAYING;
+
+    // Run GMainLoop on a dedicated thread for bus callbacks
+    bus_thread_ = std::thread([this]() {
+        g_main_loop_run(loop_);
+    });
+
     return OkVoid();
 }
 
@@ -370,6 +427,22 @@ VoidResult GStreamerPipeline::stop() {
     }
 
     state_ = State::PAUSED;
+
+    // Quit GMainLoop so bus thread can join
+    if (loop_) {
+        g_main_loop_quit(loop_);
+    }
+    // Must release lock before joining bus_thread_ (it may call bus_callback which logs)
+    lock.unlock();
+    if (bus_thread_.joinable()) {
+        bus_thread_.join();
+    }
+    lock.lock();
+    if (loop_) {
+        g_main_loop_unref(loop_);
+        loop_ = nullptr;
+    }
+
     return OkVoid();
 }
 
@@ -379,6 +452,18 @@ VoidResult GStreamerPipeline::stop() {
 
 VoidResult GStreamerPipeline::destroy() {
     std::unique_lock lock(mutex_);
+
+    // Stop GMainLoop if still running
+    if (loop_) {
+        g_main_loop_quit(loop_);
+        lock.unlock();
+        if (bus_thread_.joinable()) {
+            bus_thread_.join();
+        }
+        lock.lock();
+        g_main_loop_unref(loop_);
+        loop_ = nullptr;
+    }
 
     encoder_element_ = nullptr;
     pipeline_.reset();  // RAII: sets state to NULL and unrefs

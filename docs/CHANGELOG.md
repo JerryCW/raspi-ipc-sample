@@ -1,5 +1,19 @@
 # 变更日志
 
+## [0.2.5] - 2026-03-21
+
+### 修复
+
+- **等待 ASYNC 状态转换完成**：`gst_element_set_state(PLAYING)` 返回 `GST_STATE_CHANGE_ASYNC` 时，管道还没真正进入 PLAYING 状态。之前直接继续执行，导致帧可能无法流入 kvssink。现在用 `gst_element_get_state` 等待最多 30 秒让状态转换完成。
+- **释放 mutex 再调用 set_state**：避免 kvssink 内部回调与我们的锁产生死锁。
+- **发现 kvssink credential fetch 失败根因**：`gst-launch-1.0` 测试暴露了 `unable to set private key file` 错误——私钥文件权限问题。systemd 下以 root 运行可以读取，但 ASYNC 状态转换未等待完成导致帧不流。
+
+### 涉及文件
+
+- `src/pipeline/gstreamer_pipeline.cpp` — start() 等待 ASYNC + 释放锁
+
+---
+
 ## [0.2.4] - 2026-03-21
 
 ### 修复

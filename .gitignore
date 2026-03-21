@@ -1,0 +1,7 @@
+.kiro/
+build/
+.DS_Store
+*.o
+*.a
+compile_commands.json
+test_detail.xml

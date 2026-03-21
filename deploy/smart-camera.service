@@ -1,0 +1,23 @@
+[Unit]
+Description=Smart Camera Streaming Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/smart-camera --profile production --config /etc/smart-camera/config.ini
+Restart=on-failure
+RestartSec=10s
+WatchdogSec=30s
+MemoryMax=512M
+CPUQuota=80%
+
+# Security hardening
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/smart-camera /var/cache/smart-camera
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

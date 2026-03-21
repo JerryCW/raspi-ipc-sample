@@ -132,7 +132,7 @@ VoidResult GStreamerPipeline::select_encoder(std::string& pipeline_desc) const {
             "x264enc speed-preset=ultrafast tune=zerolatency "
             "bitrate=" + std::to_string(config_.video_preset.bitrate_kbps) +
             " key-int-max=" + std::to_string(gop) +
-            " option-string=\"--profile=baseline\"";
+            " bframes=0";
         return OkVoid();
     }
 

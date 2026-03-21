@@ -1,5 +1,17 @@
 # 变更日志
 
+## [0.3.3] - 2026-03-21
+
+### 修复
+
+- **x264enc `option-string="--profile=baseline"` 导致编码器拒绝所有帧**：`GST_DEBUG=3` 终于暴露了真正的根因——x264enc 不认识 `--profile` 作为 option-string 参数，报 `Bad name for option --profile=baseline`，然后 `rejected caps`，导致所有帧被丢弃。`gst-launch-1.0` 测试时用的是 `bframes=0` 没有 `option-string`，所以能跑。改为 `bframes=0`（和 gst-launch-1.0 测试一致），移除 `option-string`。
+
+### 涉及文件
+
+- `src/pipeline/gstreamer_pipeline.cpp` — select_encoder 移除 option-string
+
+---
+
 ## [0.3.2] - 2026-03-21
 
 ### 修复

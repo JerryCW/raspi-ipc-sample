@@ -70,10 +70,47 @@ endif()
 # =============================================================================
 
 # KVS WebRTC SDK (optional, typically Linux only)
+# Try find_package first, then fall back to manual path detection
 find_package(KVSWebRTC QUIET)
+if(NOT KVSWebRTC_FOUND)
+    # Search common install locations
+    set(_KVS_SDK_SEARCH_PATHS
+        /opt/amazon-kinesis-video-streams-webrtc-sdk-c
+        /usr/local
+    )
+    foreach(_path ${_KVS_SDK_SEARCH_PATHS})
+        if(EXISTS "${_path}/include/com/amazonaws/kinesis/video/webrtcclient/Include.h")
+            set(KVS_WEBRTC_SDK_DIR "${_path}")
+            break()
+        endif()
+        # Also check build output directory structure
+        if(EXISTS "${_path}/build/libkvsWebrtcClient.so" OR EXISTS "${_path}/build/libkvsWebrtcClient.a")
+            set(KVS_WEBRTC_SDK_DIR "${_path}")
+            break()
+        endif()
+    endforeach()
+
+    if(KVS_WEBRTC_SDK_DIR)
+        set(KVSWebRTC_FOUND TRUE)
+        # Set include and library paths
+        set(KVS_WEBRTC_INCLUDE_DIRS
+            "${KVS_WEBRTC_SDK_DIR}/include"
+            "${KVS_WEBRTC_SDK_DIR}/build"
+            "${KVS_WEBRTC_SDK_DIR}/open-source/lib/pkgconfig/../../include"
+        )
+        # Find the library
+        find_library(KVS_WEBRTC_LIB kvsWebrtcClient
+            PATHS "${KVS_WEBRTC_SDK_DIR}/build" "${KVS_WEBRTC_SDK_DIR}/lib"
+            NO_DEFAULT_PATH)
+        find_library(KVS_WEBRTC_SIGNALING_LIB kvsWebrtcSignalingClient
+            PATHS "${KVS_WEBRTC_SDK_DIR}/build" "${KVS_WEBRTC_SDK_DIR}/lib"
+            NO_DEFAULT_PATH)
+    endif()
+endif()
+
 if(KVSWebRTC_FOUND)
     add_compile_definitions(HAS_KVS_WEBRTC_SDK)
-    message(STATUS "KVS WebRTC SDK: Found")
+    message(STATUS "KVS WebRTC SDK: Found${KVS_WEBRTC_SDK_DIR:+ (${KVS_WEBRTC_SDK_DIR})}")
 else()
     message(STATUS "KVS WebRTC SDK: Not found (stub mode)")
 endif()

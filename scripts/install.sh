@@ -53,7 +53,9 @@ install_dependencies() {
         gstreamer1.0-plugins-good \
         gstreamer1.0-plugins-bad \
         libssl-dev \
-        libcurl4-openssl-dev
+        libcurl4-openssl-dev \
+        libsystemd-dev \
+        libcamera-dev
     info "Dependencies installed."
 }
 

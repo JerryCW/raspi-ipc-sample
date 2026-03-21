@@ -1,5 +1,6 @@
 #include "pipeline/gstreamer_pipeline.h"
 
+#include <iostream>
 #include <sstream>
 
 namespace sc {

@@ -313,7 +313,17 @@ target_include_directories(webrtc_agent PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_link_libraries(webrtc_agent PUBLIC config_manager)
 if(KVSWebRTC_FOUND)
     target_compile_definitions(webrtc_agent PRIVATE HAS_KVS_WEBRTC_SDK)
-    target_link_libraries(webrtc_agent PRIVATE KVSWebRTC::KVSWebRTC)
+    if(TARGET KVSWebRTC::KVSWebRTC)
+        # SDK installed with CMake config — use imported target
+        target_link_libraries(webrtc_agent PRIVATE KVSWebRTC::KVSWebRTC)
+    elseif(KVS_WEBRTC_LIB)
+        # SDK found via manual path detection
+        target_include_directories(webrtc_agent PRIVATE ${KVS_WEBRTC_INCLUDE_DIRS})
+        target_link_libraries(webrtc_agent PRIVATE ${KVS_WEBRTC_LIB})
+        if(KVS_WEBRTC_SIGNALING_LIB)
+            target_link_libraries(webrtc_agent PRIVATE ${KVS_WEBRTC_SIGNALING_LIB})
+        endif()
+    endif()
 endif()
 
 # Stream Mode FSM library

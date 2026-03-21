@@ -366,15 +366,18 @@ VoidResult GStreamerPipeline::start() {
                        "GStreamerPipeline::start");
     }
 
-    // Create GMainLoop for bus message dispatching
-    // NOTE: We do NOT start a bus_thread_ here. The main thread in main.cpp
-    // pumps the default GMainContext via g_main_context_iteration().
-    // kvssink needs the default context to be iterated for its async callbacks.
-
     // Attach bus watch to default context
     GstBus* bus = gst_element_get_bus(pipeline_.get());
     gst_bus_add_watch(bus, bus_callback, this);
     gst_object_unref(bus);
+
+    // Start GMainLoop on a dedicated bus thread — required for kvssink's
+    // internal async operations (putMedia, credential refresh).
+    // This matches the ipc-kvs-demo architecture.
+    loop_ = g_main_loop_new(nullptr, FALSE);
+    bus_thread_ = std::thread([this]() {
+        g_main_loop_run(loop_);
+    });
 
     // Release lock before set_state — kvssink's state change may trigger
     // callbacks on the bus thread that could interact with our state.
@@ -430,6 +433,21 @@ VoidResult GStreamerPipeline::stop() {
     }
 
     state_ = State::PAUSED;
+
+    // Stop GMainLoop so bus thread can join
+    if (loop_) {
+        g_main_loop_quit(loop_);
+    }
+    lock.unlock();
+    if (bus_thread_.joinable()) {
+        bus_thread_.join();
+    }
+    lock.lock();
+    if (loop_) {
+        g_main_loop_unref(loop_);
+        loop_ = nullptr;
+    }
+
     return OkVoid();
 }
 
@@ -440,8 +458,18 @@ VoidResult GStreamerPipeline::stop() {
 VoidResult GStreamerPipeline::destroy() {
     std::unique_lock lock(mutex_);
 
+    // Stop GMainLoop if still running
+    if (loop_) {
+        g_main_loop_quit(loop_);
+        lock.unlock();
+        if (bus_thread_.joinable()) bus_thread_.join();
+        lock.lock();
+        g_main_loop_unref(loop_);
+        loop_ = nullptr;
+    }
+
     encoder_element_ = nullptr;
-    pipeline_.reset();  // RAII: sets state to NULL and unrefs
+    pipeline_.reset();
 
     state_ = State::NULL_STATE;
     encoder_name_.clear();

@@ -135,6 +135,10 @@ private:
     GstPipelinePtr pipeline_;
     GstElement* encoder_element_ = nullptr;  // non-owning, owned by pipeline
 
+    // GMainLoop + bus thread for kvssink async callback dispatching
+    GMainLoop* loop_ = nullptr;
+    std::thread bus_thread_;
+
     // Bus callback for error/warning/EOS handling
     static gboolean bus_callback(GstBus* bus, GstMessage* msg, gpointer data);
 

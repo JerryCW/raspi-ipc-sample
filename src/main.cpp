@@ -10,10 +10,6 @@
 #include <string>
 #include <thread>
 
-#ifdef HAS_GSTREAMER
-#include <glib.h>
-#endif
-
 #include "ai/ai_pipeline.h"
 #include "auth/iot_authenticator.h"
 #include "buffer/frame_buffer_pool.h"
@@ -378,29 +374,11 @@ int main(int argc, char* argv[]) {
     std::cerr << "[init] All modules initialized — entering main loop" << std::endl;
 
     // ── Main event loop ─────────────────────────────────────
-    // Run GLib main loop on the main thread. This is required for kvssink
-    // and libcamerasrc to function — both depend on the default GMainContext
-    // being continuously iterated. This is exactly how gst-launch-1.0 works.
-#ifdef HAS_GSTREAMER
-    GMainLoop* main_loop = g_main_loop_new(nullptr, FALSE);
-
-    // Watch for shutdown signal in a separate thread, then quit the loop
-    std::thread shutdown_watcher([&]() {
-        while (!ShutdownHandler::shutdown_requested()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        }
-        g_main_loop_quit(main_loop);
-    });
-
-    g_main_loop_run(main_loop);  // blocks until g_main_loop_quit
-
-    shutdown_watcher.join();
-    g_main_loop_unref(main_loop);
-#else
+    // Simple sleep loop — GStreamer pipeline runs on its own threads.
+    // kvssink handles putMedia internally, no GMainLoop needed.
     while (!ShutdownHandler::shutdown_requested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
-#endif
 
     // ── Graceful shutdown ───────────────────────────────────
     log_mgr->log(LogLevel::INFO, "main", "Shutdown requested — initiating graceful shutdown");

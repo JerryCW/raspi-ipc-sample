@@ -1,5 +1,19 @@
 # 变更日志
 
+## [0.3.2] - 2026-03-21
+
+### 修复
+
+- **appsink `emit-signals=true` 导致帧不流**：对比 ipc-kvs-demo 源码发现，demo 的 appsink 通过 `g_signal_connect("new-sample", ...)` 连接了回调来消费帧，而我们的 appsink 设了 `emit-signals=true` 但没有连接任何信号处理器。未被消费的信号在 GMainContext 上无限排队，阻塞了整个 context 的 dispatch，导致 kvssink 的 putMedia 回调也无法被调度。改为 `emit-signals=false`（当前不需要从 appsink 读取帧）。
+- **移除 GMainLoop**：demo 的主循环就是简单的 `sleep(1)` 循环，没有 `g_main_loop_run`。GStreamer 管道在自己的线程上运行，kvssink 内部处理 putMedia。恢复为简单的 sleep 循环。
+
+### 涉及文件
+
+- `src/pipeline/gstreamer_pipeline.cpp` — appsink emit-signals=false
+- `src/main.cpp` — 恢复简单 sleep 循环，移除 GMainLoop
+
+---
+
 ## [0.3.1] - 2026-03-21
 
 ### 修复

@@ -817,3 +817,424 @@ _暂无。_
 **涉及的文件/组件：** 验证性任务，未修改文件。
 
 ---
+
+### [2026-03-22] — 任务: Viewer Rewrite 1.1 初始化 Vite + React + TypeScript 项目
+
+**概要：** 在 `viewer/` 目录下初始化了 Vite + React + TypeScript 项目，创建了 package.json（含 dev/build/preview/lint 脚本）、vite.config.ts、tsconfig.json、tsconfig.node.json、index.html 和 src/main.tsx 入口文件。安装了核心依赖（react 18、react-dom、react-router-dom 6、typescript 5、vite 5、@vitejs/plugin-react 4）。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。`tsc -b` 编译通过，`vite build` 成功生成 `dist/` 目录。
+
+**经验教训：** Vite 5 的 index.html 放在项目根目录（非 public/），作为入口点引用 src/main.tsx。tsconfig 使用 project references 模式分离 app 和 node 配置。
+
+**涉及的文件/组件：** viewer/package.json, viewer/vite.config.ts, viewer/tsconfig.json, viewer/tsconfig.node.json, viewer/index.html, viewer/src/main.tsx, viewer/vite-env.d.ts
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 1.2 配置 Tailwind CSS 4
+
+**概要：** 配置 Tailwind CSS 4，使用 Vite 插件方式（`@tailwindcss/vite`）集成，创建入口 CSS 并在 main.tsx 中引入。
+
+**遇到的问题：**
+- **[设计决策]：** Tailwind CSS v4 不再需要独立的 `tailwind.config.ts` 文件，改用 CSS 内的 `@theme` 指令配置。任务描述中要求创建 `tailwind.config.ts`，但 v4 的推荐方式是 Vite 插件 + CSS 配置。
+  - **解决方案/状态：** 采用 v4 推荐方式，不创建独立配置文件。
+
+**经验教训：** Tailwind CSS v4 的配置方式与 v3 有显著差异，不再使用 JS/TS 配置文件，改为 CSS-first 配置。
+
+**涉及的文件/组件：** viewer/vite.config.ts, viewer/src/index.css, viewer/src/main.tsx, viewer/package.json
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 1.3 配置 ESLint 和 Prettier
+
+**概要：** 配置 ESLint 9（flat config 格式）和 Prettier，安装相关插件（typescript-eslint、react-hooks、react-refresh），`npm run lint` 通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** ESLint 9 使用 flat config 格式（eslint.config.js），不再支持 .eslintrc。typescript-eslint 提供了便捷的 `tseslint.config()` 包装函数。
+
+**涉及的文件/组件：** viewer/eslint.config.js, viewer/.prettierrc, viewer/package.json
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 2.1 创建核心类型定义文件
+
+**概要：** 创建 `viewer/src/types/index.ts`，定义 12 个 TypeScript 接口/类型：CognitoTokens、AWSCredentials、AuthState、ConnectionStatus、SignalingConfig、WebRTCStats、Fragment、HLSStats、ViewerConfig、CognitoConfig、LogEntry、EnvConfig。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 类型定义直接从设计文档复制，确保实现与设计一致。
+
+**涉及的文件/组件：** viewer/src/types/index.ts
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 2.2 创建环境变量配置
+
+**概要：** 创建 `viewer/src/config/env.ts` 集中管理 Cognito 配置和默认 Region/Channel/Stream，使用 `import.meta.env.VITE_*` 读取环境变量。同时创建 `.env.example` 文档化所有变量，并更新 `.gitignore` 排除 `.env` 文件。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** redirectUri 默认使用 `window.location.origin`，开发和生产环境自动适配。
+
+**涉及的文件/组件：** viewer/src/config/env.ts, viewer/.env.example, viewer/.gitignore
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 3.1 实现 Cognito OAuth2 流程
+
+**概要：** 创建 `viewer/src/auth/cognito.ts`，实现六个导出函数：buildLoginUrl()、buildLogoutUrl()、parseAuthCode()、exchangeCodeForTokens()、refreshTokens()、getAwsCredentials()。安装 `@aws-sdk/client-cognito-identity` 依赖。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** Cognito Identity Pool 凭证获取需要两步调用（GetId → GetCredentialsForIdentity），region 从 userPoolId 前缀提取。refreshTokens 时 Cognito 可能不返回新的 refresh_token，需保留原值。
+
+**涉及的文件/组件：** viewer/src/auth/cognito.ts, viewer/package.json
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 3.2 实现认证 Hook
+
+**概要：** 创建 `viewer/src/auth/useAuth.ts`，实现完整的 Cognito 认证生命周期管理 Hook，包括 URL 授权码检测、localStorage 持久化、AWS 凭证获取和自动刷新调度。
+
+**遇到的问题：**
+- **[设计决策]：** React StrictMode 双重挂载导致初始化逻辑执行两次
+  - **解决方案：** 使用 `initRef` guard 防止重复初始化
+- **[设计决策]：** `computeRefreshDelay()` 导出为纯函数，方便属性测试（Property 7）
+  - **解决方案：** 刷新提前量取 10% 剩余时间和 5 分钟的较大值
+
+**经验教训：** 凭证刷新逻辑的核心计算提取为纯函数是可测试性的关键。localStorage 中 Date 对象需要 ISO 字符串序列化/反序列化。
+
+**涉及的文件/组件：** viewer/src/auth/useAuth.ts
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 5.1 实现浏览器端 SigV4 签名
+
+**概要：** 创建 `viewer/src/services/sigv4.ts`，从原 server.js 移植 SigV4 签名逻辑，使用 Web Crypto API 替代 Node.js crypto。导出 `createPresignedUrl`、`hmacSha256`、`sha256`、`getSignatureKey`、`createPresignedUrlWithDatetime`。同时创建 13 个单元测试。
+
+**遇到的问题：**
+- **[设计决策]：** Web Crypto API 是异步的（返回 Promise），原 Node.js 实现是同步的
+  - **解决方案：** 所有函数改为 async，调用链全部 await
+- **[设计决策]：** `createPresignedUrl` 内部使用 `new Date()` 生成时间戳，不利于确定性测试
+  - **解决方案：** 提取 `createPresignedUrlWithDatetime` 接受显式时间戳参数，供测试和属性测试使用
+
+**经验教训：** 将时间戳等非确定性输入参数化是实现确定性测试的关键模式。Web Crypto API 的 ArrayBuffer 需要手动转换为 hex 字符串。
+
+**涉及的文件/组件：** viewer/src/services/sigv4.ts, viewer/src/__tests__/sigv4.test.ts
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 6.1 实现 KVS API 封装
+
+**概要：** 创建 `viewer/src/services/kvs.ts`，封装四个 KVS API 函数：getSignalingChannelConfig、getIceServerConfig、listFragments、getHlsStreamingUrl。安装 AWS SDK v3 浏览器版本依赖。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** AWS SDK v3 的 KinesisVideoArchivedMediaClient 需要先通过 GetDataEndpoint 获取专用端点，再用该端点创建客户端调用 ListFragments/GetHLSStreamingSessionURL。每个 API 操作对应不同的 APIName 参数。
+
+**涉及的文件/组件：** viewer/src/services/kvs.ts, viewer/package.json
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 7.1 实现 WebRTC Hook
+
+**概要：** 创建 `viewer/src/hooks/useWebRTC.ts`，实现完整 WebRTC 连接生命周期 Hook，包括 KVS API 调用、SigV4 签名、WebSocket 信令、RTCPeerConnection 管理、ICE candidate 缓冲、15 秒超时重试（最多 3 次）和统计收集。
+
+**遇到的问题：**
+- **[设计决策]：** 将 mapIceState、createIceCandidateBuffer、createRetryTracker 提取为纯函数导出
+  - **解决方案：** 便于属性测试（Property 3, 4, 5）独立验证，不依赖 React 渲染环境
+
+**经验教训：** WebRTC Hook 中使用 isStoppedRef guard 防止异步操作在 stop() 后继续执行。KVS WebSocket 消息使用 base64 编码的 JSON payload。
+
+**涉及的文件/组件：** viewer/src/hooks/useWebRTC.ts
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 7.2 实现 WebRTC 面板组件
+
+**概要：** 创建 `viewer/src/components/WebRTCPanel.tsx`，包含 16:9 视频容器（含占位符）、开始/停止按钮、颜色编码状态徽章、统计面板和调试日志区域。集成 useWebRTC Hook。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 面板组件内联了统计显示和日志区域，后续任务 11 会将这些提取为共享组件（StatsPanel、DebugLog）。Tailwind CSS 的 aspectRatio 样式用于 16:9 视频容器。
+
+**涉及的文件/组件：** viewer/src/components/WebRTCPanel.tsx
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 9.1 实现 HLS Hook
+
+**概要：** 创建 `viewer/src/hooks/useHLS.ts`，实现 HLS 播放生命周期 Hook，包括 loadFragments、ON_DEMAND 模式播放、Safari 原生 HLS 降级、hls.js 致命/非致命错误处理、stop 清理和统计收集。安装 hls.js 依赖。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** Safari 原生 HLS 检测使用 `video.canPlayType('application/vnd.apple.mpegurl')`，需在 hls.js 之前检查。hls.js 的 `destroy()` 方法会自动清理所有内部资源。
+
+**涉及的文件/组件：** viewer/src/hooks/useHLS.ts, viewer/package.json
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 9.2 + 9.3 时间轴组件与 HLS 面板
+
+**概要：** 创建 `Timeline.tsx`（SVG 时间轴，支持缩放/拖拽/点击选择，导出 clampTimeRange 和 mapFragmentsToSegments 纯函数）和 `HLSPanel.tsx`（集成 useHLS Hook + Timeline 组件，含视频播放器、统计面板、调试日志）。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** SVG 百分比定位（x/width 用百分比字符串）简化了响应式时间轴渲染。时间轴点击选择使用 ±30 分钟窗口作为默认播放范围。
+
+**涉及的文件/组件：** viewer/src/components/Timeline.tsx, viewer/src/components/HLSPanel.tsx
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 11.1-11.6 UI 组件与页面布局
+
+**概要：** 批量完成 6 个 UI 任务，创建 11 个文件：useDebugLog Hook（含 formatTimestamp 导出）、DebugLog 组件、useStats Hook（含 getStatColor/parseWebRTCStats/parseHLSStats 导出）、StatsPanel 组件（颜色编码）、VideoPlayer 组件（16:9 容器）、ConfigPanel 组件（三个配置项）、TabView 组件（key-based remounting 清理资源）、Layout 组件、ViewerPage 页面、App.tsx（AuthGuard + Router）、main.tsx 更新。
+
+**遇到的问题：**
+- **[设计决策]：** TabView 使用 key-based remounting 实现 Tab 切换时的资源清理
+  - **解决方案：** 切换 Tab 时递增 mountKey，React 卸载旧组件触发 useEffect cleanup，自动停止 WebRTC/HLS
+- **[设计决策]：** 统计解析和颜色编码函数提取为纯函数导出
+  - **解决方案：** 便于 Property 11-14 属性测试独立验证
+
+**经验教训：** 批量处理紧密耦合的 UI 任务效率更高。key-based remounting 是 React 中实现组件完全重置的惯用模式。
+
+**涉及的文件/组件：** viewer/src/hooks/useDebugLog.ts, viewer/src/components/DebugLog.tsx, viewer/src/hooks/useStats.ts, viewer/src/components/StatsPanel.tsx, viewer/src/components/VideoPlayer.tsx, viewer/src/components/ConfigPanel.tsx, viewer/src/components/TabView.tsx, viewer/src/components/Layout.tsx, viewer/src/pages/ViewerPage.tsx, viewer/src/App.tsx, viewer/src/main.tsx
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 13.1 + 14.1 + 14.2 + 15.1 + 15.2 后端、部署与构建验证
+
+**概要：** 批量完成 5 个基础设施任务：Express.js 简化后端（静态文件托管 + /health 端点）、Dockerfile（多阶段构建、非 root 用户、健康检查）、ECS Fargate 任务定义（256 CPU / 512MB）、Vitest 测试框架配置、完整构建流程验证（build ✅、lint ✅、test 13/13 ✅）。
+
+**遇到的问题：**
+- **[设计决策]：** 后端使用 plain JS（server/index.js）而非 TypeScript，避免额外的 TS 编译步骤
+  - **解决方案：** Express 服务极简（~20 行），不需要类型安全的复杂度
+
+**经验教训：** 后端极简化后仅需静态文件托管和健康检查，所有 AWS API 调用已迁移到前端 Cognito 凭证直接访问。
+
+**涉及的文件/组件：** viewer/server/index.js, viewer/Dockerfile, viewer/ecs/task-definition.json, viewer/vitest.config.ts, viewer/package.json
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 16. 最终检查点 - 全部验证
+
+**概要：** Viewer Rewrite spec 所有必需任务全部完成。TypeScript 编译通过，Vite 构建成功生成 dist/，ESLint 无错误，13 个 SigV4 单元测试全部通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 整个 Viewer Rewrite 从脚手架到完整 SPA 应用共完成约 30 个文件的创建/修改，涵盖认证、SigV4 签名、KVS API、WebRTC、HLS、时间轴、UI 组件、路由、后端和部署。可选的属性测试和单元测试任务可后续按需添加。
+
+**涉及的文件/组件：** 验证性任务，未修改文件。
+
+---
+
+### [2026-03-22] — 任务: Viewer Rewrite 1.4 编写 package.json 脚本验证测试
+
+**概要：** 创建 `viewer/src/__tests__/package.test.ts`，验证 package.json 中 `dev`、`build`、`preview`、`lint` 四个脚本均已定义为非空字符串。4 个测试全部通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。测试文件已存在（之前构建验证阶段创建），确认内容正确。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** viewer/src/__tests__/package.test.ts
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 3.3 编写属性测试：回调 URL 授权码提取
+
+**概要：** 创建 `viewer/src/__tests__/cognito.test.ts`，使用 fast-check 编写 Property 6 属性测试（4 个测试用例），验证 parseAuthCode 函数对含/不含 code 参数的 URL 和无效 URL 的处理。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** viewer/src/__tests__/cognito.test.ts
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 3.4 编写属性测试：凭证刷新调度
+
+**概要：** 修复 `viewer/src/__tests__/useAuth.test.ts` 中 Property 7 属性测试的浮点精度 bug，5 个属性测试（100 次迭代）全部通过。
+
+**遇到的问题：**
+- **[类型: bug]：** "90% of remaining" 测试用例使用 `Math.floor(remainingMs * 0.9)` 作为期望值，但实现计算 `remaining - remaining * 0.1`，两者在某些整数值下因浮点精度差异不等（反例：3000001 → 2700000.9 vs 2700000）
+  - **解决方案/状态：** 将期望值改为 `remainingMs - remainingMs * 0.1`，与实现一致。
+
+**经验教训：** 浮点运算中 `a * 0.9` 和 `a - a * 0.1` 不总是相等，属性测试能有效发现此类边界情况。
+
+**涉及的文件/组件：** viewer/src/__tests__/useAuth.test.ts
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 3.5 编写单元测试：Cognito 登录重定向、登出清理、错误处理
+
+**概要：** 在 `viewer/src/__tests__/cognito.test.ts` 中添加 13 个单元测试，覆盖 buildLoginUrl（5 个）、buildLogoutUrl（3 个）、登出 localStorage 清理（1 个）、exchangeCodeForTokens 错误处理（4 个）。全部 17 个测试通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 使用 `vi.mock` 模拟 env 模块可有效隔离 Cognito 配置依赖，使测试不依赖真实环境变量。
+
+**涉及的文件/组件：** viewer/src/__tests__/cognito.test.ts
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 5.2 编写属性测试：SigV4 签名确定性
+
+**概要：** 在 `viewer/src/__tests__/sigv4.test.ts` 中添加 Property 1 属性测试，验证相同输入调用 `createPresignedUrlWithDatetime` 两次产生相同 URL。100 次迭代全部通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** viewer/src/__tests__/sigv4.test.ts
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 5.3 编写属性测试：SigV4 签名 URL 结构完整性
+
+**概要：** 在 `viewer/src/__tests__/sigv4.test.ts` 中添加 Property 2 属性测试（3 个测试用例），验证 SigV4 URL 包含所有必需参数、sessionToken 非空时包含 Security-Token、为空时不包含。全部 17 个测试通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** viewer/src/__tests__/sigv4.test.ts
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 7.3 编写属性测试：ICE Candidate 缓冲与排空
+
+**概要：** 创建 `viewer/src/__tests__/useWebRTC.test.ts`，添加 Property 3 属性测试（3 个测试用例），验证 ICE candidate 缓冲、flush 和复用逻辑。全部通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** viewer/src/__tests__/useWebRTC.test.ts
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 7.4 编写属性测试：WebRTC 重试状态机
+
+**概要：** 在 `viewer/src/__tests__/useWebRTC.test.ts` 中添加 Property 4 属性测试（3 个测试用例），验证重试计数单调递增、上限为 3、达到上限后不再重试。全部 6 个测试通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** viewer/src/__tests__/useWebRTC.test.ts
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 7.5 编写属性测试：连接状态映射
+
+**概要：** 在 `viewer/src/__tests__/useWebRTC.test.ts` 中添加 Property 5 属性测试（3 个测试用例），验证 `mapIceState` 函数对所有 ICE 状态的映射正确性、确定性和输出有效性。全部 9 个测试通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** viewer/src/__tests__/useWebRTC.test.ts
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 9.4 + 9.5 编写属性测试：时间轴缩放范围约束 + Fragment 到时间段的映射
+
+**概要：** 创建 `viewer/src/__tests__/Timeline.test.ts`，批量完成 Property 8（5 个测试）和 Property 9（4 个测试），验证 `clampTimeRange` 和 `mapFragmentsToSegments` 纯函数。全部 9 个测试通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** viewer/src/__tests__/Timeline.test.ts
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 9.6 编写单元测试：HLS 默认时间范围、Safari 降级、错误处理、停止清理
+
+**概要：** 创建 `viewer/src/__tests__/useHLS.test.ts`，包含 13 个单元测试覆盖默认 24 小时时间范围、Safari 原生 HLS 降级、致命/非致命错误处理、stop 清理（destroy + 状态重置 + 视频元素清理）。全部 74 个项目测试通过。
+
+**遇到的问题：**
+- **[类型: 设计决策]：** 为支持测试，从 HLSPanel.tsx 导出 `getDefaultTimeRange`，从 useHLS.ts 导出 `INITIAL_STATS`
+  - **解决方案/状态：** 纯函数和常量导出不影响组件封装性，便于测试验证。
+
+**经验教训：** hls.js mock 需要追踪事件处理器（hlsEventHandlers），以便在测试中模拟致命/非致命错误回调。
+
+**涉及的文件/组件：** viewer/src/__tests__/useHLS.test.ts, viewer/src/hooks/useHLS.ts, viewer/src/components/HLSPanel.tsx
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 11.7-11.11 批量完成 5 个 UI 属性测试
+
+**概要：** 批量完成 Property 10-14 属性测试：Tab 切换资源清理（TabView.test.ts，3 个测试）、统计指标颜色编码（StatsPanel.test.ts，7 个测试）、WebRTC 统计解析（useStats.test.ts，4 个测试）、HLS 统计解析（useStats.test.ts，4 个测试）、日志时间戳格式（useDebugLog.test.ts，4 个测试）。全部 22 个测试通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 将核心逻辑提取为纯函数导出（getStatColor、parseWebRTCStats、parseHLSStats、formatTimestamp、clampTimeRange、mapFragmentsToSegments）是属性测试的关键前提，使测试不依赖 React 渲染环境。
+
+**涉及的文件/组件：** viewer/src/__tests__/TabView.test.ts, viewer/src/__tests__/StatsPanel.test.ts, viewer/src/__tests__/useStats.test.ts, viewer/src/__tests__/useDebugLog.test.ts
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 11.12 编写单元测试：Tab 显示切换、占位符、配置面板编辑、统计重置
+
+**概要：** 完成 4 个测试文件共 29 个单元测试：TabView（5 个 Tab 切换测试）、VideoPlayer（3 个占位符测试）、ConfigPanel（5 个配置编辑测试）、StatsPanel（4 组统计重置/显示测试）。全部通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** viewer/src/__tests__/TabView.test.ts, viewer/src/__tests__/VideoPlayer.test.tsx, viewer/src/__tests__/ConfigPanel.test.tsx, viewer/src/__tests__/StatsPanel.test.ts
+
+---
+
+
+### [2026-03-22] — 任务: Viewer Rewrite 13.2 + 13.3 健康检查属性测试与移除端点单元测试
+
+**概要：** 创建 `viewer/server/__tests__/server.test.ts`，包含 Property 15 属性测试（/health 端点响应结构，100 次迭代）和 2 个单元测试（/api/credentials 和 /api/webrtc-config 返回 404）。全部 118 个项目测试通过。
+
+**遇到的问题：**
+- **[类型: 依赖]：** Express 5 使用 path-to-regexp v8，通配符路由语法从 `app.get('*', ...)` 改为 `app.get('/{*splat}', ...)`
+  - **解决方案/状态：** 更新 server/index.js 中的通配符路由和 API 404 处理器为新语法。
+- **[类型: bug]：** 原 server/index.js 缺少显式的 `/api/*` 404 处理器，移除的端点被 SPA fallback 捕获返回 HTML 而非 404
+  - **解决方案/状态：** 在 SPA fallback 之前添加 `app.all('/api/{*splat}', ...)` 返回 404 JSON。
+
+**经验教训：** Express 5 的路由语法变更是常见的升级陷阱，需要注意通配符路由的新格式。
+
+**涉及的文件/组件：** viewer/server/__tests__/server.test.ts, viewer/server/index.js
+
+---
+

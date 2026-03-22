@@ -1,5 +1,45 @@
 # 变更日志
 
+## [0.4.0] - 2026-03-22
+
+### 新功能（Viewer）
+
+- **Viewer Rewrite 属性测试与单元测试全覆盖**：完成设计文档中全部 15 个正确性属性的 property-based 测试和所有单元测试，共 118 个测试用例。
+- **Cognito 认证环境搭建**：通过 AWS CLI 创建 User Pool、App Client（OAuth2 授权码流程）、Identity Pool（含 KVS 权限 IAM Role），配置 `.env` 环境变量。
+- **WebRTC 实时视频连接成功**：修复缺失的 `pc.onicecandidate` 处理器，实现双向 ICE candidate 交换，WebRTC 连接从 `checking` 超时变为正常 `connected`。
+- **时间轴重写**：固定当日 00:00-24:00（UTC+8）范围，日期选择器（◀ 日期 ▶ + "今天"按钮），蓝色虚线当前时间指示器，红色圆点播放位置指示器，底部图例。
+- **Fragment 预加载**：登录完成后立即在 ViewerPage 层级加载今天的 fragments，切换到录像回放 Tab 时直接显示绿色录像段。
+
+### 改进
+
+- **Tab 切换保持连接状态**：从 key-based remounting 改为 CSS `hidden` 切换，WebRTC/HLS 连接在 Tab 切换时不断开。
+- **全局 UTC+8 24 小时制**：时间轴标签、调试日志时间戳、统计面板"当前时间"统一使用 UTC+8。
+- **HLS 播放位置准确映射**：`stats.currentTime` 从 `new Date()`（当前时间）改为 `playbackStartRef + video.currentTime`，准确映射到实际录像时间点。
+- **ListFragments 分页**：添加 `NextToken` 循环分页 + `MaxResults: 1000`，获取完整 fragment 列表。
+- **WebSocket 空消息过滤**：跳过 KVS 信令 WebSocket 的空帧/心跳消息，消除 JSON 解析错误。
+- **Express 5 路由兼容**：通配符路由从 `app.get('*', ...)` 改为 `app.get('/{*splat}', ...)`，添加 `/api/*` 显式 404 处理器。
+
+### 修复
+
+- **`computeRefreshDelay` 浮点精度 bug**：属性测试发现 `Math.floor(remaining * 0.9)` 与 `remaining - remaining * 0.1` 在某些整数值下不等。
+- **缺失 `pc.onicecandidate`**：Viewer 未发送本地 ICE candidate 给 MASTER，导致 ICE 协商单向失败。
+
+### 涉及文件
+
+- `viewer/src/hooks/useWebRTC.ts` — onicecandidate、空消息过滤
+- `viewer/src/hooks/useHLS.ts` — playbackStartRef、播放位置修正
+- `viewer/src/services/kvs.ts` — ListFragments 分页
+- `viewer/src/components/Timeline.tsx` — 完全重写（固定日范围、日期选择器、指示器）
+- `viewer/src/components/HLSPanel.tsx` — 预加载 fragments、UTC+8 时间
+- `viewer/src/components/TabView.tsx` — CSS hidden 替代 key remounting
+- `viewer/src/components/WebRTCPanel.tsx` — UTC+8 日志时间戳
+- `viewer/src/pages/ViewerPage.tsx` — fragment 预加载逻辑
+- `viewer/server/index.js` — Express 5 路由兼容
+- `viewer/src/__tests__/` — 15 个属性测试 + 单元测试文件
+- `viewer/.env` — Cognito 环境变量配置
+
+---
+
 ## [0.3.1] - 2026-03-22
 
 ### 修复（树莓派真机调试）

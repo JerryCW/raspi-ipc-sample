@@ -1,0 +1,48 @@
+{
+  "name": "rpi-kvs-viewer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "start": "node server/index.js",
+    "test": "vitest --run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cognito-identity": "^3.1014.0",
+    "@aws-sdk/client-kinesis-video": "^3.1014.0",
+    "@aws-sdk/client-kinesis-video-archived-media": "^3.1014.0",
+    "@aws-sdk/client-kinesis-video-signaling": "^3.1014.0",
+    "express": "^5.2.1",
+    "hls.js": "^1.6.15",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@tailwindcss/vite": "^4.2.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/supertest": "^7.2.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^9.39.4",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.26",
+    "fast-check": "^4.6.0",
+    "globals": "^17.4.0",
+    "jsdom": "^29.0.1",
+    "prettier": "^3.8.1",
+    "supertest": "^7.2.2",
+    "tailwindcss": "^4.2.2",
+    "typescript": "~5.6.3",
+    "typescript-eslint": "^8.57.1",
+    "vite": "^5.4.14",
+    "vitest": "^4.1.0"
+  }
+}

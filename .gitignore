@@ -7,3 +7,6 @@ compile_commands.json
 test_detail.xml
 raspi-camera-viewer-origin/
 viewer/node_modules/
+viewer/.env
+viewer/.env.local
+.vscode/

@@ -1,0 +1,24 @@
+version: 0.2
+
+env:
+  variables:
+    AWS_DEFAULT_REGION: ap-southeast-1
+
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to Amazon ECR...
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/raspi-eye"
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+  build:
+    commands:
+      - echo Building Docker image...
+      - cd viewer
+      - docker build --build-arg VITE_COGNITO_USER_POOL_ID=${VITE_COGNITO_USER_POOL_ID} --build-arg VITE_COGNITO_CLIENT_ID=${VITE_COGNITO_CLIENT_ID} --build-arg VITE_COGNITO_IDENTITY_POOL_ID=${VITE_COGNITO_IDENTITY_POOL_ID} --build-arg VITE_COGNITO_DOMAIN=${VITE_COGNITO_DOMAIN} --build-arg VITE_COGNITO_REDIRECT_URI=${VITE_COGNITO_REDIRECT_URI} --build-arg VITE_AWS_REGION=${VITE_AWS_REGION} -t kvs-camera-viewer .
+      - docker tag kvs-camera-viewer:latest "${ECR_URI}:latest"
+  post_build:
+    commands:
+      - echo Pushing to ECR...
+      - docker push "${ECR_URI}:latest"
+      - echo Build completed on $(date)

@@ -1,7 +1,9 @@
 .kiro/
-build/
+device/build/
 .DS_Store
 *.o
 *.a
 compile_commands.json
 test_detail.xml
+raspi-camera-viewer-origin/
+viewer/node_modules/

@@ -836,7 +836,8 @@ TEST(WebRTCAgentProperty, NoViewerSkipsFramePull) {
 TEST(WebRTCAgentProperty, ShutdownStateConsistency) {
     auto auth = std::make_shared<sc::MockIoTAuthenticator>();
 
-    rc::check("After stop_signaling() (called 1-3 times), state is consistent: not connected, 0 viewers, no deadlock",
+    rc::check(
+        "After stop_signaling() (called 1-3 times), state is consistent: not connected, 0 viewers, no deadlock",
         [&auth]() {
             // Generate random max_viewers for assertion variety
             const auto max_viewers = *rc::gen::inRange<uint32_t>(1, 21);

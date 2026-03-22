@@ -104,6 +104,10 @@ if(NOT KVSWebRTC_FOUND)
         find_library(KVS_WEBRTC_SIGNALING_LIB kvsWebrtcSignalingClient
             PATHS "${KVS_WEBRTC_SDK_DIR}/build" "${KVS_WEBRTC_SDK_DIR}/lib"
             NO_DEFAULT_PATH)
+        # kvsCommonLws contains credential provider functions (createStaticCredentialProvider, etc.)
+        find_library(KVS_COMMON_LWS_LIB kvsCommonLws
+            PATHS "${KVS_WEBRTC_SDK_DIR}/open-source/lib" "${KVS_WEBRTC_SDK_DIR}/build" "${KVS_WEBRTC_SDK_DIR}/lib"
+            NO_DEFAULT_PATH)
     endif()
 endif()
 
@@ -329,6 +333,9 @@ if(KVSWebRTC_FOUND)
         target_link_libraries(webrtc_agent PUBLIC ${KVS_WEBRTC_LIB})
         if(KVS_WEBRTC_SIGNALING_LIB)
             target_link_libraries(webrtc_agent PUBLIC ${KVS_WEBRTC_SIGNALING_LIB})
+        endif()
+        if(KVS_COMMON_LWS_LIB)
+            target_link_libraries(webrtc_agent PUBLIC ${KVS_COMMON_LWS_LIB})
         endif()
     endif()
 endif()

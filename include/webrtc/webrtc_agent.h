@@ -189,8 +189,8 @@ private:
                                       UINT32 msg_len);
 
     // Peer connection callbacks
-    static STATUS on_ice_candidate(UINT64 custom_data,
-                                    PCHAR candidate);
+    static void on_ice_candidate(UINT64 custom_data,
+                                 PCHAR candidate);
     static void on_connection_state_change(UINT64 custom_data,
                                             RTC_PEER_CONNECTION_STATE state);
 

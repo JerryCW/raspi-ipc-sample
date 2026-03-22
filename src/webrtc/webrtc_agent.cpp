@@ -338,14 +338,12 @@ VoidResult WebRTCAgent::initialize(const WebRTCConfig& config,
                        "WebRTCAgent::initialize");
     }
 
-    // Step 2: Create signaling client info using IoT Thing Name as client ID
-    retStatus = createSignalingClientInfo(&client_info_);
-    if (retStatus != STATUS_SUCCESS) {
-        deinitKvsWebRtc();
-        return ErrVoid(ErrorCode::WebRTCSignalingFailed,
-                       "Failed to create signaling client info, status: " +
-                           std::to_string(retStatus),
-                       "WebRTCAgent::initialize");
+    // Step 2: Initialize signaling client info
+    MEMSET(&client_info_, 0, SIZEOF(SignalingClientInfo));
+    client_info_.version = SIGNALING_CLIENT_INFO_CURRENT_VERSION;
+    // Use IoT Thing Name as client ID if available
+    if (!config_.channel_name.empty()) {
+        STRNCPY(client_info_.clientId, config_.channel_name.c_str(), MAX_SIGNALING_CLIENT_ID_LEN);
     }
 
     // Step 3: Fill ChannelInfo struct (channel name, region, MASTER role)
@@ -364,14 +362,14 @@ VoidResult WebRTCAgent::initialize(const WebRTCConfig& config,
     signaling_callbacks_.errorReportFn = on_signaling_error;
 
     // Step 5: Register credential provider callback
-    // The SDK calls get_credentials_callback() when it needs fresh credentials
-    signaling_callbacks_.getCredentialsFn = get_credentials_callback;
+    // Credentials are provided via the IoT credential provider mechanism
+    // configured through ChannelInfo, not via signaling callbacks
 
     // Step 6: Create signaling client
-    retStatus = createSignalingSync(&client_info_, &channel_info_,
-                                    &signaling_callbacks_,
-                                    reinterpret_cast<UINT64>(this),
-                                    &signaling_client_handle_);
+    retStatus = createSignalingClientSync(&client_info_, &channel_info_,
+                                          &signaling_callbacks_,
+                                          credential_provider_,
+                                          &signaling_client_handle_);
     if (retStatus != STATUS_SUCCESS) {
         deinitKvsWebRtc();
         return ErrVoid(ErrorCode::WebRTCSignalingFailed,
@@ -955,16 +953,16 @@ STATUS WebRTCAgent::on_signaling_error(UINT64 custom_data,
     return STATUS_SUCCESS;
 }
 
-STATUS WebRTCAgent::on_ice_candidate(UINT64 custom_data,
-                                      PCHAR candidate) {
+void WebRTCAgent::on_ice_candidate(UINT64 custom_data,
+                                    PCHAR candidate) {
     auto* ctx = reinterpret_cast<PeerCallbackContext*>(custom_data);
     if (ctx == nullptr || ctx->agent == nullptr) {
-        return STATUS_NULL_ARG;
+        return;
     }
 
     // NULL candidate signals end of ICE gathering — nothing to send
     if (candidate == nullptr) {
-        return STATUS_SUCCESS;
+        return;
     }
 
     auto* self = ctx->agent;
@@ -981,14 +979,7 @@ STATUS WebRTCAgent::on_ice_candidate(UINT64 custom_data,
 
     // Send via signaling channel (mutex-protected)
     std::lock_guard<std::mutex> send_lock(self->signaling_send_mutex_);
-    STATUS retStatus = signalingClientSendMessageSync(
-        self->signaling_client_handle_, &msg);
-    if (retStatus != STATUS_SUCCESS) {
-        // Log but don't fail — ICE can still succeed with other candidates
-        return retStatus;
-    }
-
-    return STATUS_SUCCESS;
+    signalingClientSendMessageSync(self->signaling_client_handle_, &msg);
 }
 
 void WebRTCAgent::on_connection_state_change(UINT64 custom_data,

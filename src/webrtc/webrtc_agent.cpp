@@ -778,13 +778,20 @@ void WebRTCAgent::handle_sdp_offer(const std::string& viewer_id,
         return;
     }
 
+    // Add supported codecs (must come before addTransceiver — matches ipc-kvs-demo)
+    retStatus = addSupportedCodec(peer_connection,
+        RTC_CODEC_H264_PROFILE_42E01F_LEVEL_ASYMMETRY_ALLOWED_PACKETIZATION_MODE);
+    if (retStatus != STATUS_SUCCESS) { freePeerConnection(&peer_connection); return; }
+
+    addSupportedCodec(peer_connection, RTC_CODEC_OPUS);  // non-fatal if fails
+
     // Set up video track: H.264
     RtcMediaStreamTrack video_track;
     MEMSET(&video_track, 0, SIZEOF(RtcMediaStreamTrack));
     video_track.kind = MEDIA_STREAM_TRACK_KIND_VIDEO;
     video_track.codec = RTC_CODEC_H264_PROFILE_42E01F_LEVEL_ASYMMETRY_ALLOWED_PACKETIZATION_MODE;
-    STRCPY(video_track.streamId, "smart-camera-video");
-    STRCPY(video_track.trackId, "smart-camera-video-track");
+    STRCPY(video_track.streamId, "myKvsVideoStream");
+    STRCPY(video_track.trackId, "myVideoTrack");
 
     PRtcRtpTransceiver video_transceiver = nullptr;
     RtcRtpTransceiverInit video_init;
@@ -797,8 +804,8 @@ void WebRTCAgent::handle_sdp_offer(const std::string& viewer_id,
     MEMSET(&audio_track, 0, SIZEOF(RtcMediaStreamTrack));
     audio_track.kind = MEDIA_STREAM_TRACK_KIND_AUDIO;
     audio_track.codec = RTC_CODEC_OPUS;
-    STRCPY(audio_track.streamId, "smart-camera-audio");
-    STRCPY(audio_track.trackId, "smart-camera-audio-track");
+    STRCPY(audio_track.streamId, "myKvsVideoStream");
+    STRCPY(audio_track.trackId, "myAudioTrack");
 
     PRtcRtpTransceiver audio_transceiver = nullptr;
     RtcRtpTransceiverInit audio_init;
@@ -857,8 +864,12 @@ void WebRTCAgent::handle_sdp_offer(const std::string& viewer_id,
         msg.version = SIGNALING_MESSAGE_CURRENT_VERSION;
         msg.messageType = SIGNALING_MESSAGE_TYPE_ANSWER;
         STRNCPY(msg.peerClientId, viewer_id.c_str(), MAX_SIGNALING_CLIENT_ID_LEN);
-        msg.payloadLen = (UINT32) STRLEN(answer_sdp.sdp);
-        STRNCPY(msg.payload, answer_sdp.sdp, msg.payloadLen);
+
+        UINT32 buffLen = MAX_SIGNALING_MESSAGE_LEN;
+        retStatus = serializeSessionDescriptionInit(&answer_sdp, msg.payload, &buffLen);
+        if (retStatus != STATUS_SUCCESS) { freePeerConnection(&peer_connection); return; }
+        msg.payloadLen = (UINT32) STRLEN(msg.payload);
+        msg.correlationId[0] = '\0';
 
         std::lock_guard<std::mutex> send_lock(signaling_send_mutex_);
         retStatus = signalingClientSendMessageSync(signaling_client_handle_, &msg);

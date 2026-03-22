@@ -1,5 +1,44 @@
 # 变更日志
 
+## [0.3.1] - 2026-03-22
+
+### 修复（树莓派真机调试）
+
+- **SDK 头文件缺失**：`webrtc_agent.h` 在 `#ifdef HAS_KVS_WEBRTC_SDK` 块中使用 SDK 类型但未 include SDK 头文件，macOS 跳过但 RPi 编译失败。添加条件 `#include <com/amazonaws/kinesis/video/webrtcclient/Include.h>`。
+- **SDK include 路径和编译宏 PRIVATE→PUBLIC**：`HAS_KVS_WEBRTC_SDK` 和 SDK include 路径仅对 `webrtc_agent` target 可见，`smart-camera` 和测试 target 编译失败。改为 PUBLIC 传播。
+- **`get_pipeline_element()` 纯虚函数导致 StubPipeline 抽象**：RPi 有 GStreamer，纯虚方法使测试中的 StubPipeline 无法实例化。改为带默认实现（返回 nullptr）的虚方法。
+- **SDK API 名称不匹配**：`createSignalingClientInfo()` 不存在（改为 MEMSET 直接初始化）、`createSignalingSync()` → `createSignalingClientSync()`、`on_ice_candidate` 返回类型 STATUS → void。
+- **`channelRoleType` 未设置**：SDK 发送 `"Role": "UNKOWN"` 导致 400 错误。添加 `SIGNALING_CHANNEL_ROLE_TYPE_MASTER`。
+- **SSL CA 证书路径缺失**：SDK 的 libwebsockets 无法验证 AWS 服务 TLS 证书。设置 `channelInfo.pCertPath`。
+- **凭证提供者 nullptr**：`createStaticCredentialProvider` 替换为 `createLwsIotCredentialProvider`（匹配 ipc-kvs-demo 参考实现），通过 IoT X.509 证书直接获取 STS 凭证。
+- **SDP 反序列化缺失**：直接传原始 payload 给 `setRemoteDescription()` 导致 `0x40100001` 错误。添加 `deserializeSessionDescriptionInit()` / `serializeSessionDescriptionInit()`。
+- **缺少 `addSupportedCodec()`**：Peer Connection 创建后未注册支持的编解码器，导致 SDP 协商失败。添加 H264 + OPUS codec 注册。
+- **链接缺少 `libkvsCommonLws`**：`createStaticCredentialProvider` / `createLwsIotCredentialProvider` 在 `libkvsCommonLws.so` 中，CMake 未链接。
+
+### 新功能
+
+- **`--webrtc-only` 调试模式**：跳过 GStreamer/KVS/监控模块，仅运行 WebRTC 信令，每 3 秒打印连接状态和 viewer 数量，方便树莓派上独立调试信令连接。
+- **WebRTCConfig 新增 IoT 证书字段**：`iot_credential_endpoint`、`iot_cert_path`、`iot_key_path`、`iot_ca_cert_path`、`iot_role_alias`、`iot_thing_name`，从 `AppConfig.iot` 自动填充。
+
+### 经验教训
+
+- macOS stub 编译通过不代表 RPi SDK 路径能编译——条件编译块中的类型、API 名称、回调签名必须在真机上验证。
+- KVS WebRTC C SDK 的 API 与文档/示例有差异，以实际 `Include.h` 和 SDK sample 代码为准。
+- `createLwsIotCredentialProvider` 是 IoT 设备的正确凭证方式，`createStaticCredentialProvider` 的 STS token 会过期且不自动刷新。
+- SDP 必须通过 SDK 的 `deserializeSessionDescriptionInit` / `serializeSessionDescriptionInit` 处理，不能直接传原始字符串。
+
+### 涉及文件
+
+- `include/webrtc/webrtc_agent.h` — SDK include、回调签名修复
+- `include/pipeline/gstreamer_pipeline.h` — `get_pipeline_element()` 默认实现
+- `include/config/config_manager.h` — WebRTCConfig IoT 字段
+- `src/webrtc/webrtc_agent.cpp` — 凭证提供者、SDP 序列化、addSupportedCodec、channelRoleType
+- `src/pipeline/gstreamer_pipeline.cpp` — `get_pipeline_element()` 实现
+- `src/main.cpp` — `--webrtc-only` 模式、IoT 字段填充
+- `CMakeLists.txt` — PUBLIC 传播、kvsCommonLws 链接
+
+---
+
 ## [0.3.0] - 2026-03-22
 
 ### 新功能

@@ -528,6 +528,11 @@ std::string GStreamerPipeline::encoder_name() const {
     return encoder_name_;
 }
 
+GstElement* GStreamerPipeline::get_pipeline_element() {
+    std::shared_lock lock(mutex_);
+    return pipeline_ ? pipeline_.get() : nullptr;
+}
+
 #endif  // HAS_GSTREAMER
 
 }  // namespace sc

@@ -75,6 +75,12 @@ public:
 
     // Encoder type name
     virtual std::string encoder_name() const = 0;
+
+#ifdef HAS_GSTREAMER
+    // Access underlying GstElement pipeline (for appsink frame pull, etc.)
+    // Returns nullptr if pipeline not built or GStreamer not available.
+    virtual GstElement* get_pipeline_element() = 0;
+#endif
 };
 
 inline const char* pipeline_state_to_string(IGStreamerPipeline::State s) {
@@ -112,6 +118,10 @@ public:
     VoidResult set_bitrate(uint32_t bitrate_kbps) override;
     State current_state() const override;
     std::string encoder_name() const override;
+
+#ifdef HAS_GSTREAMER
+    GstElement* get_pipeline_element() override;
+#endif
 
 private:
     mutable std::shared_mutex mutex_;

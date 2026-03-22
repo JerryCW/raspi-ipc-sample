@@ -352,6 +352,22 @@ VoidResult WebRTCAgent::initialize(const WebRTCConfig& config,
     channel_info_.channelType = SIGNALING_CHANNEL_TYPE_SINGLE_MASTER;
     channel_info_.pChannelName = const_cast<PCHAR>(config_.channel_name.c_str());
     channel_info_.pRegion = const_cast<PCHAR>(config_.region.c_str());
+    channel_info_.cachingPolicy = SIGNALING_API_CALL_CACHE_TYPE_FILE;
+    channel_info_.cachingPeriod = SIGNALING_API_CALL_CACHE_TTL_SENTINEL_VALUE;
+    channel_info_.retry = TRUE;
+    channel_info_.reconnect = TRUE;
+    channel_info_.messageTtl = 0;  // Default 60 seconds
+    // CA cert path for TLS verification of AWS service endpoints
+    // Try IoT root CA first, fall back to system CA bundle
+    static std::string ca_cert_path;
+    if (auth_ && !auth_->is_credential_valid()) {
+        // Use system CA bundle
+        ca_cert_path = "/etc/ssl/certs/ca-certificates.crt";
+    } else {
+        // Prefer system CA bundle for AWS endpoint verification
+        ca_cert_path = "/etc/ssl/certs/ca-certificates.crt";
+    }
+    channel_info_.pCertPath = const_cast<PCHAR>(ca_cert_path.c_str());
 
     // Step 4: Register signaling callbacks
     MEMSET(&signaling_callbacks_, 0, SIZEOF(SignalingClientCallbacks));

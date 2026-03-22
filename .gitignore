@@ -9,4 +9,5 @@ raspi-camera-viewer-origin/
 viewer/node_modules/
 viewer/.env
 viewer/.env.local
+viewer/dist/
 .vscode/

@@ -101,6 +101,14 @@ int main(int argc, char* argv[]) {
         return EXIT_FAILURE;
     }
 
+    // Populate WebRTC IoT cert fields from IoT config
+    config.webrtc.iot_credential_endpoint = config.iot.credential_endpoint;
+    config.webrtc.iot_cert_path = config.iot.cert_path;
+    config.webrtc.iot_key_path = config.iot.key_path;
+    config.webrtc.iot_ca_cert_path = config.iot.root_ca_path;
+    config.webrtc.iot_role_alias = config.iot.role_alias;
+    config.webrtc.iot_thing_name = config.iot.thing_name;
+
     // ── 2. Log_Manager ──────────────────────────────────────
     log_init_step("Log_Manager");
     auto log_mgr = std::make_shared<LogManager>();

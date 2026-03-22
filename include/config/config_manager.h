@@ -57,6 +57,14 @@ struct WebRTCConfig {
     std::vector<std::string> turn_urls;
     std::string turn_username;
     std::string turn_password;
+
+    // IoT cert paths for SDK credential provider (createLwsIotCredentialProvider)
+    std::string iot_credential_endpoint;
+    std::string iot_cert_path;
+    std::string iot_key_path;
+    std::string iot_ca_cert_path;
+    std::string iot_role_alias;
+    std::string iot_thing_name;
 };
 
 // ============================================================

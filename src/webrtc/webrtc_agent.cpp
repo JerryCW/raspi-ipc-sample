@@ -341,7 +341,10 @@ VoidResult WebRTCAgent::initialize(const WebRTCConfig& config,
     // Step 2: Initialize signaling client info
     MEMSET(&client_info_, 0, SIZEOF(SignalingClientInfo));
     client_info_.version = SIGNALING_CLIENT_INFO_CURRENT_VERSION;
-    // Use IoT Thing Name as client ID if available
+    client_info_.loggingLevel = LOG_LEVEL_VERBOSE;  // Verbose for debugging
+    client_info_.cacheFilePath = NULL;  // Use default cache path
+    client_info_.signalingClientCreationMaxRetryAttempts =
+        CREATE_SIGNALING_CLIENT_RETRY_ATTEMPTS_SENTINEL_VALUE;
     if (!config_.channel_name.empty()) {
         STRNCPY(client_info_.clientId, config_.channel_name.c_str(), MAX_SIGNALING_CLIENT_ID_LEN);
     }
@@ -350,6 +353,7 @@ VoidResult WebRTCAgent::initialize(const WebRTCConfig& config,
     MEMSET(&channel_info_, 0, SIZEOF(ChannelInfo));
     channel_info_.version = CHANNEL_INFO_CURRENT_VERSION;
     channel_info_.channelType = SIGNALING_CHANNEL_TYPE_SINGLE_MASTER;
+    channel_info_.channelRoleType = SIGNALING_CHANNEL_ROLE_TYPE_MASTER;
     channel_info_.pChannelName = const_cast<PCHAR>(config_.channel_name.c_str());
     channel_info_.pRegion = const_cast<PCHAR>(config_.region.c_str());
     channel_info_.cachingPolicy = SIGNALING_API_CALL_CACHE_TYPE_FILE;
@@ -357,16 +361,11 @@ VoidResult WebRTCAgent::initialize(const WebRTCConfig& config,
     channel_info_.retry = TRUE;
     channel_info_.reconnect = TRUE;
     channel_info_.messageTtl = 0;  // Default 60 seconds
-    // CA cert path for TLS verification of AWS service endpoints
-    // Try IoT root CA first, fall back to system CA bundle
+    // CA cert path for TLS verification — use IoT CA cert (matches ipc-kvs-demo)
     static std::string ca_cert_path;
-    if (auth_ && !auth_->is_credential_valid()) {
-        // Use system CA bundle
-        ca_cert_path = "/etc/ssl/certs/ca-certificates.crt";
-    } else {
-        // Prefer system CA bundle for AWS endpoint verification
-        ca_cert_path = "/etc/ssl/certs/ca-certificates.crt";
-    }
+    ca_cert_path = config_.iot_ca_cert_path.empty()
+        ? "/etc/ssl/certs/ca-certificates.crt"
+        : config_.iot_ca_cert_path;
     channel_info_.pCertPath = const_cast<PCHAR>(ca_cert_path.c_str());
 
     // Step 4: Register signaling callbacks
@@ -377,36 +376,28 @@ VoidResult WebRTCAgent::initialize(const WebRTCConfig& config,
     signaling_callbacks_.stateChangeFn = on_signaling_state_changed;
     signaling_callbacks_.errorReportFn = on_signaling_error;
 
-    // Step 5: Create credential provider from IoT authenticator
-    // Get STS credentials and create a static credential provider for the SDK
-    {
-        auto cred_result = auth_->get_credentials();
-        if (cred_result.is_ok()) {
-            const auto& creds = cred_result.value();
-            auto exp_epoch = std::chrono::duration_cast<std::chrono::seconds>(
-                creds.expiration.time_since_epoch());
-            UINT64 expiration_100ns = static_cast<UINT64>(exp_epoch.count()) *
-                                      HUNDREDS_OF_NANOS_IN_A_SECOND;
-            retStatus = createStaticCredentialProvider(
-                const_cast<PCHAR>(creds.access_key_id.c_str()), 0,
-                const_cast<PCHAR>(creds.secret_access_key.c_str()), 0,
-                const_cast<PCHAR>(creds.session_token.c_str()), 0,
-                expiration_100ns,
-                &credential_provider_);
-            if (retStatus != STATUS_SUCCESS) {
-                deinitKvsWebRtc();
-                return ErrVoid(ErrorCode::WebRTCSignalingFailed,
-                               "Failed to create credential provider, status: " +
-                                   std::to_string(retStatus),
-                               "WebRTCAgent::initialize");
-            }
-        } else {
+    // Step 5: Create IoT credential provider (matches ipc-kvs-demo)
+    if (!config_.iot_credential_endpoint.empty() && !config_.iot_cert_path.empty()) {
+        retStatus = createLwsIotCredentialProvider(
+            const_cast<PCHAR>(config_.iot_credential_endpoint.c_str()),
+            const_cast<PCHAR>(config_.iot_cert_path.c_str()),
+            const_cast<PCHAR>(config_.iot_key_path.c_str()),
+            const_cast<PCHAR>(ca_cert_path.c_str()),
+            const_cast<PCHAR>(config_.iot_role_alias.c_str()),
+            const_cast<PCHAR>(config_.iot_thing_name.c_str()),
+            &credential_provider_);
+        if (retStatus != STATUS_SUCCESS) {
             deinitKvsWebRtc();
             return ErrVoid(ErrorCode::WebRTCSignalingFailed,
-                           "Failed to get credentials for WebRTC: " +
-                               cred_result.error().message,
+                           "Failed to create IoT credential provider, status: " +
+                               std::to_string(retStatus),
                            "WebRTCAgent::initialize");
         }
+    } else {
+        deinitKvsWebRtc();
+        return ErrVoid(ErrorCode::WebRTCSignalingFailed,
+                       "IoT credential config incomplete for WebRTC",
+                       "WebRTCAgent::initialize");
     }
 
     // Step 6: Create signaling client
@@ -696,7 +687,7 @@ void WebRTCAgent::shutdown_sequence() {
 
     // Step 5.5: Free credential provider
     if (credential_provider_ != nullptr) {
-        freeStaticCredentialProvider(&credential_provider_);
+        freeIotCredentialProvider(&credential_provider_);
         credential_provider_ = nullptr;
     }
 
@@ -747,27 +738,36 @@ void WebRTCAgent::handle_sdp_offer(const std::string& viewer_id,
 
     // Check viewer capacity
     if (viewer_count_.load() >= config_.max_viewers) {
-        // At capacity — reject this viewer
         return;
     }
 
     // Create RtcConfiguration with ICE servers
     RtcConfiguration rtc_config;
-    MEMSET(&rtc_config, 0, SIZEOF(RtcConfiguration));
+    MEMSET(&rtc_config, 0x00, SIZEOF(RtcConfiguration));
     rtc_config.iceTransportPolicy = ICE_TRANSPORT_POLICY_ALL;
 
-    // Copy ICE server configs (STUN/TURN) obtained during signaling fetch
-    for (UINT32 i = 0; i < ice_config_count_; i++) {
-        for (UINT32 j = 0; j < ice_configs_[i].uriCount; j++) {
-            STRNCPY(rtc_config.iceServers[i].urls,
-                    ice_configs_[i].uris[j],
-                    MAX_ICE_CONFIG_URI_LEN);
-            STRNCPY(rtc_config.iceServers[i].credential,
-                    ice_configs_[i].password,
-                    MAX_ICE_CONFIG_CREDENTIAL_LEN);
-            STRNCPY(rtc_config.iceServers[i].username,
-                    ice_configs_[i].userName,
-                    MAX_ICE_CONFIG_USER_NAME_LEN);
+    // Set STUN server (slot 0)
+    SNPRINTF(rtc_config.iceServers[0].urls, MAX_ICE_CONFIG_URI_LEN,
+             "stun:stun.kinesisvideo.%s.amazonaws.com:443",
+             config_.region.c_str());
+
+    // Get TURN servers from signaling client (slots 1+)
+    UINT32 iceConfigCount = 0;
+    signalingClientGetIceConfigInfoCount(signaling_client_handle_, &iceConfigCount);
+    UINT32 uriCount = 0;
+    // Use only 1 TURN server to optimize candidate gathering
+    UINT32 maxTurnServer = (iceConfigCount > 0) ? 1 : 0;
+    for (UINT32 i = 0; i < maxTurnServer; i++) {
+        PIceConfigInfo pIceConfigInfo = nullptr;
+        if (signalingClientGetIceConfigInfo(signaling_client_handle_, i, &pIceConfigInfo) == STATUS_SUCCESS && pIceConfigInfo != nullptr) {
+            for (UINT32 j = 0; j < pIceConfigInfo->uriCount; j++) {
+                if (uriCount + 1 < MAX_ICE_SERVERS_COUNT) {
+                    STRNCPY(rtc_config.iceServers[uriCount + 1].urls, pIceConfigInfo->uris[j], MAX_ICE_CONFIG_URI_LEN);
+                    STRNCPY(rtc_config.iceServers[uriCount + 1].credential, pIceConfigInfo->password, MAX_ICE_CONFIG_CREDENTIAL_LEN);
+                    STRNCPY(rtc_config.iceServers[uriCount + 1].username, pIceConfigInfo->userName, MAX_ICE_CONFIG_USER_NAME_LEN);
+                    uriCount++;
+                }
+            }
         }
     }
 
@@ -786,18 +786,13 @@ void WebRTCAgent::handle_sdp_offer(const std::string& viewer_id,
     STRCPY(video_track.streamId, "smart-camera-video");
     STRCPY(video_track.trackId, "smart-camera-video-track");
 
-    // Add video transceiver (SENDRECV direction)
     PRtcRtpTransceiver video_transceiver = nullptr;
     RtcRtpTransceiverInit video_init;
     video_init.direction = RTC_RTP_TRANSCEIVER_DIRECTION_SENDRECV;
-    retStatus = addTransceiver(peer_connection, &video_track, &video_init,
-                               &video_transceiver);
-    if (retStatus != STATUS_SUCCESS) {
-        freePeerConnection(&peer_connection);
-        return;
-    }
+    retStatus = addTransceiver(peer_connection, &video_track, &video_init, &video_transceiver);
+    if (retStatus != STATUS_SUCCESS) { freePeerConnection(&peer_connection); return; }
 
-    // Set up audio track: OPUS (required for SDP negotiation even without audio)
+    // Set up audio track: OPUS (required even without audio)
     RtcMediaStreamTrack audio_track;
     MEMSET(&audio_track, 0, SIZEOF(RtcMediaStreamTrack));
     audio_track.kind = MEDIA_STREAM_TRACK_KIND_AUDIO;
@@ -805,18 +800,13 @@ void WebRTCAgent::handle_sdp_offer(const std::string& viewer_id,
     STRCPY(audio_track.streamId, "smart-camera-audio");
     STRCPY(audio_track.trackId, "smart-camera-audio-track");
 
-    // Add audio transceiver (SENDRECV direction)
     PRtcRtpTransceiver audio_transceiver = nullptr;
     RtcRtpTransceiverInit audio_init;
     audio_init.direction = RTC_RTP_TRANSCEIVER_DIRECTION_SENDRECV;
-    retStatus = addTransceiver(peer_connection, &audio_track, &audio_init,
-                               &audio_transceiver);
-    if (retStatus != STATUS_SUCCESS) {
-        freePeerConnection(&peer_connection);
-        return;
-    }
+    retStatus = addTransceiver(peer_connection, &audio_track, &audio_init, &audio_transceiver);
+    if (retStatus != STATUS_SUCCESS) { freePeerConnection(&peer_connection); return; }
 
-    // Build PeerInfo and allocate callback context before registering callbacks
+    // Build PeerInfo and callback context
     PeerInfo peer;
     peer.viewer_id = viewer_id;
     peer.state = PeerInfo::State::CONNECTING;
@@ -829,74 +819,52 @@ void WebRTCAgent::handle_sdp_offer(const std::string& viewer_id,
     peer.callback_context = std::make_unique<PeerCallbackContext>();
     peer.callback_context->agent = this;
     peer.callback_context->viewer_id = viewer_id;
-
-    // Raw pointer for SDK callbacks — lifetime managed by PeerInfo::callback_context
     auto* ctx = peer.callback_context.get();
 
-    // Register onIceCandidate callback (per peer connection)
-    retStatus = peerConnectionOnIceCandidate(
-        peer_connection, reinterpret_cast<UINT64>(ctx), on_ice_candidate);
-    if (retStatus != STATUS_SUCCESS) {
-        freePeerConnection(&peer_connection);
-        return;
-    }
+    // Register callbacks
+    retStatus = peerConnectionOnIceCandidate(peer_connection, reinterpret_cast<UINT64>(ctx), on_ice_candidate);
+    if (retStatus != STATUS_SUCCESS) { freePeerConnection(&peer_connection); return; }
 
-    // Register onConnectionStateChange callback (per peer connection)
-    retStatus = peerConnectionOnConnectionStateChange(
-        peer_connection, reinterpret_cast<UINT64>(ctx),
-        on_connection_state_change);
-    if (retStatus != STATUS_SUCCESS) {
-        freePeerConnection(&peer_connection);
-        return;
-    }
+    retStatus = peerConnectionOnConnectionStateChange(peer_connection, reinterpret_cast<UINT64>(ctx), on_connection_state_change);
+    if (retStatus != STATUS_SUCCESS) { freePeerConnection(&peer_connection); return; }
 
-    // Set remote description (the viewer's SDP offer)
+    // Deserialize and set remote SDP offer (matching SDK sample pattern)
     RtcSessionDescriptionInit offer_sdp;
-    MEMSET(&offer_sdp, 0, SIZEOF(RtcSessionDescriptionInit));
-    offer_sdp.type = SDP_TYPE_OFFER;
-    STRNCPY(offer_sdp.sdp, sdp_offer.c_str(), MAX_SESSION_DESCRIPTION_INIT_SDP_LEN);
+    MEMSET(&offer_sdp, 0x00, SIZEOF(RtcSessionDescriptionInit));
+    retStatus = deserializeSessionDescriptionInit(
+        const_cast<PCHAR>(sdp_offer.c_str()),
+        static_cast<UINT32>(sdp_offer.size()),
+        &offer_sdp);
+    if (retStatus != STATUS_SUCCESS) { freePeerConnection(&peer_connection); return; }
 
     retStatus = setRemoteDescription(peer_connection, &offer_sdp);
-    if (retStatus != STATUS_SUCCESS) {
-        freePeerConnection(&peer_connection);
-        return;
-    }
+    if (retStatus != STATUS_SUCCESS) { freePeerConnection(&peer_connection); return; }
 
-    // Create SDP answer
+    // SDK sample order: setLocalDescription → createAnswer → send
     RtcSessionDescriptionInit answer_sdp;
-    MEMSET(&answer_sdp, 0, SIZEOF(RtcSessionDescriptionInit));
-    retStatus = createAnswer(peer_connection, &answer_sdp);
-    if (retStatus != STATUS_SUCCESS) {
-        freePeerConnection(&peer_connection);
-        return;
-    }
+    MEMSET(&answer_sdp, 0x00, SIZEOF(RtcSessionDescriptionInit));
 
-    // Set local description
     retStatus = setLocalDescription(peer_connection, &answer_sdp);
-    if (retStatus != STATUS_SUCCESS) {
-        freePeerConnection(&peer_connection);
-        return;
-    }
+    if (retStatus != STATUS_SUCCESS) { freePeerConnection(&peer_connection); return; }
+
+    retStatus = createAnswer(peer_connection, &answer_sdp);
+    if (retStatus != STATUS_SUCCESS) { freePeerConnection(&peer_connection); return; }
 
     // Send SDP answer via signaling channel
     {
         SignalingMessage msg;
         MEMSET(&msg, 0, SIZEOF(SignalingMessage));
+        msg.version = SIGNALING_MESSAGE_CURRENT_VERSION;
         msg.messageType = SIGNALING_MESSAGE_TYPE_ANSWER;
         STRNCPY(msg.peerClientId, viewer_id.c_str(), MAX_SIGNALING_CLIENT_ID_LEN);
-        STRNCPY(msg.payload, answer_sdp.sdp, MAX_SIGNALING_MESSAGE_LEN);
-        msg.payloadLen = STRLEN(answer_sdp.sdp);  // CRITICAL: no null terminator
-        msg.version = SIGNALING_MESSAGE_CURRENT_VERSION;
+        msg.payloadLen = (UINT32) STRLEN(answer_sdp.sdp);
+        STRNCPY(msg.payload, answer_sdp.sdp, msg.payloadLen);
 
         std::lock_guard<std::mutex> send_lock(signaling_send_mutex_);
         retStatus = signalingClientSendMessageSync(signaling_client_handle_, &msg);
-        if (retStatus != STATUS_SUCCESS) {
-            freePeerConnection(&peer_connection);
-            return;
-        }
+        if (retStatus != STATUS_SUCCESS) { freePeerConnection(&peer_connection); return; }
     }
 
-    // Store peer in the map
     peers_[viewer_id] = std::move(peer);
 }
 
@@ -904,19 +872,21 @@ void WebRTCAgent::handle_ice_candidate(const std::string& viewer_id,
                                        const std::string& ice_candidate) {
     std::unique_lock lock(mutex_);
 
-    // Find the peer in the map
     auto it = peers_.find(viewer_id);
     if (it == peers_.end()) {
         return;
     }
 
-    // Add the remote ICE candidate to the peer connection
     RtcIceCandidateInit candidate_init;
     MEMSET(&candidate_init, 0, SIZEOF(RtcIceCandidateInit));
-    STRNCPY(candidate_init.candidate, ice_candidate.c_str(),
-            MAX_ICE_CANDIDATE_INIT_CANDIDATE_LEN);
-
-    addIceCandidate(it->second.peer_connection, candidate_init.candidate);
+    // Use SDK deserializer matching the sample's handleRemoteCandidate pattern
+    STATUS retStatus = deserializeRtcIceCandidateInit(
+        const_cast<PCHAR>(ice_candidate.c_str()),
+        static_cast<UINT32>(ice_candidate.size()),
+        &candidate_init);
+    if (retStatus == STATUS_SUCCESS) {
+        addIceCandidate(it->second.peer_connection, candidate_init.candidate);
+    }
 }
 
 // ============================================================
@@ -1018,14 +988,14 @@ void WebRTCAgent::on_ice_candidate(UINT64 custom_data,
     auto* self = ctx->agent;
     const auto& viewer_id = ctx->viewer_id;
 
-    // Build signaling message with the local ICE candidate
     SignalingMessage msg;
     MEMSET(&msg, 0, SIZEOF(SignalingMessage));
+    msg.version = SIGNALING_MESSAGE_CURRENT_VERSION;
     msg.messageType = SIGNALING_MESSAGE_TYPE_ICE_CANDIDATE;
     STRNCPY(msg.peerClientId, viewer_id.c_str(), MAX_SIGNALING_CLIENT_ID_LEN);
-    STRNCPY(msg.payload, candidate, MAX_SIGNALING_MESSAGE_LEN);
-    msg.payloadLen = STRLEN(msg.payload);  // CRITICAL: no null terminator
-    msg.version = SIGNALING_MESSAGE_CURRENT_VERSION;
+    msg.payloadLen = (UINT32) STRNLEN(candidate, MAX_SIGNALING_MESSAGE_LEN);
+    STRNCPY(msg.payload, candidate, msg.payloadLen);
+    msg.correlationId[0] = '\0';
 
     // Send via signaling channel (mutex-protected)
     std::lock_guard<std::mutex> send_lock(self->signaling_send_mutex_);

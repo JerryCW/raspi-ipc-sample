@@ -16,6 +16,11 @@
 #include "config/config_manager.h"
 #include "core/types.h"
 
+#ifdef HAS_KVS_WEBRTC_SDK
+// SDK include MUST be outside namespace sc to avoid namespace pollution (see CHANGELOG 0.1.4)
+#include <com/amazonaws/kinesis/video/webrtcclient/Include.h>
+#endif
+
 namespace sc {
 
 // ============================================================

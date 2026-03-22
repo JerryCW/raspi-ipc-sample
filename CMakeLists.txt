@@ -215,7 +215,7 @@ if(GSTREAMER_FOUND)
 endif()
 
 # =============================================================================
-# Google Test (FetchContent)
+# Google Test & RapidCheck (FetchContent)
 # =============================================================================
 include(FetchContent)
 FetchContent_Declare(
@@ -225,7 +225,15 @@ FetchContent_Declare(
 )
 # Prevent overriding parent project compiler/linker settings
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
+
+FetchContent_Declare(
+    rapidcheck
+    GIT_REPOSITORY https://github.com/emil-e/rapidcheck.git
+    GIT_TAG        ff6af6fc683159deb51c543b065eba14dfcf329b
+)
+set(RC_ENABLE_GTEST ON CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(googletest rapidcheck)
 
 enable_testing()
 

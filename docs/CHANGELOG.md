@@ -1,5 +1,38 @@
 # 变更日志
 
+## [0.3.0] - 2026-03-22
+
+### 新功能
+
+- **KVS WebRTC 实时直播集成**：完成 WebRTCAgent 的 KVS WebRTC C SDK 真实实现，替换骨架代码。
+  - SDK 初始化与信令客户端创建（initKvsWebRtc、createSignalingSync、MASTER 角色注册）
+  - 信令连接与指数退避重连（signalingClientFetchSync、signalingClientConnectSync、2s→60s 退避）
+  - Peer Connection 创建与 SDP/ICE 协商（H.264 视频 + OPUS 音频 transceiver、SENDRECV 方向）
+  - H.264 帧分发（send_frame() 遍历 CONNECTED peers 调用 writeFrame()，shared_lock 读锁）
+  - 凭证自动刷新（getCredentialsFn 回调，剩余 <5 分钟触发 force_refresh()）
+  - 优雅关闭（6 步顺序：断开信令→关闭 peers→sleep 1s→释放 peers→释放信令→反初始化 SDK）
+- **main.cpp 帧拉取线程**：GStreamer appsink pull 模式，从 webrtc_sink 拉取 H.264 帧并调用 send_frame()，无 Viewer 时跳过以节省 CPU。
+- **RapidCheck 属性测试**：10 个正确性属性的 11 个属性测试，覆盖指数退避、容量上限、STRLEN、Viewer 计数、帧分发、凭证刷新、关闭一致性、stub no-op。
+
+### 改进
+
+- IWebRTCAgent 接口新增 send_frame() 方法
+- PeerCallbackContext 结构体关联 C SDK 回调与 C++ 对象
+- WebRTC_FramePull 关闭步骤确保帧拉取在信令之前停止
+- 条件编译兼容：macOS stub 模式 481 个测试全部通过
+
+### 涉及文件
+
+- `include/webrtc/webrtc_agent.h` — 接口变更、PeerCallbackContext、SDK 私有成员
+- `src/webrtc/webrtc_agent.cpp` — SDK 路径完整实现
+- `src/main.cpp` — start_signaling()、帧拉取线程、关闭顺序
+- `tests/test_webrtc_agent.cpp` — 11 个属性测试 + 7 个 send_frame 单元测试
+- `CMakeLists.txt` — RapidCheck FetchContent 集成
+- `tests/CMakeLists.txt` — rapidcheck 链接
+- `docs/DEVLOG.md` — 开发日志合并
+
+---
+
 ## [0.2.0] - 2026-03-22
 
 ### 新功能

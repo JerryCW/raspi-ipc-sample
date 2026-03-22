@@ -38,9 +38,9 @@ add_executable(test_stream_uploader test_stream_uploader.cpp)
 target_link_libraries(test_stream_uploader PRIVATE stream_uploader iot_authenticator GTest::gtest_main)
 gtest_discover_tests(test_stream_uploader)
 
-# test_webrtc_agent — unit tests for WebRTC_Agent
+# test_webrtc_agent — unit tests + property tests for WebRTC_Agent
 add_executable(test_webrtc_agent test_webrtc_agent.cpp)
-target_link_libraries(test_webrtc_agent PRIVATE webrtc_agent iot_authenticator GTest::gtest_main)
+target_link_libraries(test_webrtc_agent PRIVATE webrtc_agent iot_authenticator rapidcheck rapidcheck_gtest GTest::gtest_main)
 gtest_discover_tests(test_webrtc_agent)
 
 # test_bitrate_controller — unit tests for Bitrate_Controller

@@ -12,6 +12,19 @@
 namespace sc {
 
 // ============================================================
+// Testable helper: credential refresh decision logic
+// ============================================================
+
+bool should_refresh_credentials(
+    std::chrono::system_clock::time_point expiration,
+    std::chrono::system_clock::time_point now,
+    int threshold_seconds) {
+    auto remaining = std::chrono::duration_cast<std::chrono::seconds>(
+        expiration - now);
+    return remaining.count() < threshold_seconds;
+}
+
+// ============================================================
 // Factory
 // ============================================================
 
@@ -215,6 +228,22 @@ void WebRTCAgent::cleanup_disconnected_peers() {
     }
 }
 
+VoidResult WebRTCAgent::send_frame(const uint8_t* /*data*/, size_t /*size*/,
+                                   uint64_t /*timestamp_us*/) {
+    // Stub: no-op, return success
+    return OkVoid();
+}
+
+void WebRTCAgent::handle_sdp_offer(const std::string& /*viewer_id*/,
+                                   const std::string& /*sdp_offer*/) {
+    // Stub: no-op
+}
+
+void WebRTCAgent::handle_ice_candidate(const std::string& /*viewer_id*/,
+                                       const std::string& /*ice_candidate*/) {
+    // Stub: no-op
+}
+
 void WebRTCAgent::shutdown_sequence() {
     // Step 1: Disconnect signaling
     signaling_connected_.store(false);
@@ -300,11 +329,53 @@ VoidResult WebRTCAgent::initialize(const WebRTCConfig& config,
         config_.max_viewers = kDefaultMaxViewers;
     }
 
-    // Initialize KVS WebRTC SDK
+    // Step 1: Initialize KVS WebRTC SDK
     STATUS retStatus = initKvsWebRtc();
     if (retStatus != STATUS_SUCCESS) {
         return ErrVoid(ErrorCode::WebRTCSignalingFailed,
                        "Failed to initialize KVS WebRTC SDK, status: " +
+                           std::to_string(retStatus),
+                       "WebRTCAgent::initialize");
+    }
+
+    // Step 2: Create signaling client info using IoT Thing Name as client ID
+    retStatus = createSignalingClientInfo(&client_info_);
+    if (retStatus != STATUS_SUCCESS) {
+        deinitKvsWebRtc();
+        return ErrVoid(ErrorCode::WebRTCSignalingFailed,
+                       "Failed to create signaling client info, status: " +
+                           std::to_string(retStatus),
+                       "WebRTCAgent::initialize");
+    }
+
+    // Step 3: Fill ChannelInfo struct (channel name, region, MASTER role)
+    MEMSET(&channel_info_, 0, SIZEOF(ChannelInfo));
+    channel_info_.version = CHANNEL_INFO_CURRENT_VERSION;
+    channel_info_.channelType = SIGNALING_CHANNEL_TYPE_SINGLE_MASTER;
+    channel_info_.pChannelName = const_cast<PCHAR>(config_.channel_name.c_str());
+    channel_info_.pRegion = const_cast<PCHAR>(config_.region.c_str());
+
+    // Step 4: Register signaling callbacks
+    MEMSET(&signaling_callbacks_, 0, SIZEOF(SignalingClientCallbacks));
+    signaling_callbacks_.version = SIGNALING_CLIENT_CALLBACKS_CURRENT_VERSION;
+    signaling_callbacks_.customData = reinterpret_cast<UINT64>(this);
+    signaling_callbacks_.messageReceivedFn = on_signaling_message;
+    signaling_callbacks_.stateChangeFn = on_signaling_state_changed;
+    signaling_callbacks_.errorReportFn = on_signaling_error;
+
+    // Step 5: Register credential provider callback
+    // The SDK calls get_credentials_callback() when it needs fresh credentials
+    signaling_callbacks_.getCredentialsFn = get_credentials_callback;
+
+    // Step 6: Create signaling client
+    retStatus = createSignalingSync(&client_info_, &channel_info_,
+                                    &signaling_callbacks_,
+                                    reinterpret_cast<UINT64>(this),
+                                    &signaling_client_handle_);
+    if (retStatus != STATUS_SUCCESS) {
+        deinitKvsWebRtc();
+        return ErrVoid(ErrorCode::WebRTCSignalingFailed,
+                       "Failed to create signaling client, status: " +
                            std::to_string(retStatus),
                        "WebRTCAgent::initialize");
     }
@@ -394,19 +465,32 @@ VoidResult WebRTCAgent::attempt_signaling_connect() {
                        "WebRTCAgent::attempt_signaling_connect");
     }
 
-    // In real implementation:
-    // 1. Create signaling client with MASTER role
-    // 2. Configure STUN/TURN ICE servers
-    // 3. Set up SDP offer/answer callbacks
-    // 4. Set up ICE candidate exchange callbacks
-    // 5. Connect to signaling channel
-    //
-    // Key points:
-    // - payloadLen must use STRLEN (no null terminator)
-    // - Add audio transceiver + OPUS codec even if not sending audio
-    // - Transceiver direction must be SENDRECV
-    // - Stream/track names must match SDK conventions
-    // - Use signaling_send_mutex_ for all signaling writes
+    // Step 1: Fetch signaling channel endpoints (HTTPS, WSS, TURN, etc.)
+    {
+        std::lock_guard<std::mutex> send_lock(signaling_send_mutex_);
+        STATUS retStatus = signalingClientFetchSync(signaling_client_handle_);
+        if (retStatus != STATUS_SUCCESS) {
+            return ErrVoid(ErrorCode::WebRTCSignalingFailed,
+                           "Failed to fetch signaling channel endpoints, status: " +
+                               std::to_string(retStatus),
+                           "WebRTCAgent::attempt_signaling_connect");
+        }
+    }
+
+    // Step 2: Connect to signaling channel via WebSocket
+    {
+        std::lock_guard<std::mutex> send_lock(signaling_send_mutex_);
+        STATUS retStatus = signalingClientConnectSync(signaling_client_handle_);
+        if (retStatus != STATUS_SUCCESS) {
+            return ErrVoid(ErrorCode::WebRTCSignalingFailed,
+                           "Failed to connect to signaling channel, status: " +
+                               std::to_string(retStatus),
+                           "WebRTCAgent::attempt_signaling_connect");
+        }
+    }
+
+    // Step 3: Mark signaling as connected
+    signaling_connected_.store(true);
 
     return OkVoid();
 }
@@ -480,7 +564,14 @@ void WebRTCAgent::cleanup_disconnected_peers() {
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                 now - it->second.disconnected_at);
             if (elapsed.count() >= kDisconnectCleanupTimeoutSec) {
-                // In real implementation: free peer connection resources
+                // Free peer connection resources before erasing
+                if (it->second.peer_connection != nullptr) {
+                    STATUS retStatus = freePeerConnection(&it->second.peer_connection);
+                    if (retStatus != STATUS_SUCCESS) {
+                        // WARNING: freePeerConnection failed during cleanup — continue
+                    }
+                    it->second.peer_connection = nullptr;
+                }
                 it = peers_.erase(it);
                 continue;
             }
@@ -490,25 +581,33 @@ void WebRTCAgent::cleanup_disconnected_peers() {
 }
 
 void WebRTCAgent::shutdown_sequence() {
-    // Step 1: Disconnect signaling
+    // Mark state flags first so background threads can exit
     signaling_connected_.store(false);
     running_.store(false);
     reconnecting_.store(false);
 
-    // Stop reconnect thread
-    if (reconnect_thread_ && reconnect_thread_->joinable()) {
-        reconnect_thread_->join();
-    }
-    reconnect_thread_.reset();
-
-    // Stop cleanup thread
+    // Wait for cleanup thread and reconnect thread to finish before
+    // releasing SDK resources — prevents use-after-free (Req 9.5)
     cleanup_running_.store(false);
     if (cleanup_thread_ && cleanup_thread_->joinable()) {
         cleanup_thread_->join();
     }
     cleanup_thread_.reset();
 
-    // Step 2: Close peers
+    if (reconnect_thread_ && reconnect_thread_->joinable()) {
+        reconnect_thread_->join();
+    }
+    reconnect_thread_.reset();
+
+    // Step 1: Disconnect signaling (Req 9.1)
+    {
+        STATUS retStatus = signalingClientDisconnectSync(signaling_client_handle_);
+        if (retStatus != STATUS_SUCCESS) {
+            // WARNING: signaling disconnect failed — continue shutdown (Req 9.6)
+        }
+    }
+
+    // Step 2: Close all Peer Connections (Req 9.2)
     {
         std::unique_lock lock(mutex_);
         for (auto& [id, peer] : peers_) {
@@ -517,27 +616,497 @@ void WebRTCAgent::shutdown_sequence() {
             }
             peer.state = PeerInfo::State::DISCONNECTING;
             peer.disconnected_at = std::chrono::steady_clock::now();
-            // In real implementation: closePeerConnection()
+
+            if (peer.peer_connection != nullptr) {
+                STATUS retStatus = closePeerConnection(peer.peer_connection);
+                if (retStatus != STATUS_SUCCESS) {
+                    // WARNING: closePeerConnection failed — continue (Req 9.6)
+                }
+            }
         }
     }
 
-    // Step 3: Sleep 1s (allow pending operations to complete)
+    // Step 3: Sleep 1s — allow pending operations to complete (Req 9.1)
     std::this_thread::sleep_for(std::chrono::milliseconds(kShutdownPeerSleepMs));
 
-    // Step 4: Free peers
+    // Step 4: Free Peer Connection resources (Req 9.3)
     {
         std::unique_lock lock(mutex_);
-        // In real implementation: freePeerConnection() for each peer
+        for (auto& [id, peer] : peers_) {
+            if (peer.peer_connection != nullptr) {
+                STATUS retStatus = freePeerConnection(&peer.peer_connection);
+                if (retStatus != STATUS_SUCCESS) {
+                    // WARNING: freePeerConnection failed — continue (Req 9.6)
+                }
+                peer.peer_connection = nullptr;
+            }
+        }
         peers_.clear();
     }
 
-    // Step 5: Free signaling
-    // In real implementation: freeSignalingClient()
+    // Step 5: Free signaling client (Req 9.4)
+    {
+        STATUS retStatus = freeSignalingClient(&signaling_client_handle_);
+        if (retStatus != STATUS_SUCCESS) {
+            // WARNING: freeSignalingClient failed — continue (Req 9.6)
+        }
+    }
 
-    // Step 6: Deinit SDK
-    // In real implementation: deinitKvsWebRtc()
+    // Step 6: Deinit KVS WebRTC SDK (Req 9.1)
+    {
+        STATUS retStatus = deinitKvsWebRtc();
+        if (retStatus != STATUS_SUCCESS) {
+            // WARNING: deinitKvsWebRtc failed — continue (Req 9.6)
+        }
+    }
 
     initialized_ = false;
+}
+
+VoidResult WebRTCAgent::send_frame(const uint8_t* data, size_t size,
+                                   uint64_t timestamp_us) {
+    // Construct KVS WebRTC SDK Frame struct
+    Frame frame;
+    MEMSET(&frame, 0, SIZEOF(Frame));
+    frame.frameData = const_cast<PBYTE>(data);
+    frame.size = static_cast<UINT32>(size);
+    frame.presentationTs = timestamp_us * DEFAULT_TIME_UNIT_IN_NANOS;
+    frame.flags = FRAME_FLAG_NONE;
+
+    // Use shared_lock (read lock) to iterate peers — allows concurrent
+    // frame sends without blocking peer management operations
+    std::shared_lock<std::shared_mutex> lock(mutex_);
+
+    for (const auto& [viewer_id, peer] : peers_) {
+        // Only send to CONNECTED peers; skip CONNECTING and DISCONNECTING
+        if (peer.state != PeerInfo::State::CONNECTED) {
+            continue;
+        }
+
+        STATUS retStatus = writeFrame(peer.video_transceiver, &frame);
+        if (retStatus != STATUS_SUCCESS) {
+            // Single peer failure: log warning, continue to other peers
+            // (do not abort the entire frame distribution)
+        }
+    }
+
+    return OkVoid();
+}
+
+void WebRTCAgent::handle_sdp_offer(const std::string& viewer_id,
+                                   const std::string& sdp_offer) {
+    std::unique_lock lock(mutex_);
+
+    // Check viewer capacity
+    if (viewer_count_.load() >= config_.max_viewers) {
+        // At capacity — reject this viewer
+        return;
+    }
+
+    // Create RtcConfiguration with ICE servers
+    RtcConfiguration rtc_config;
+    MEMSET(&rtc_config, 0, SIZEOF(RtcConfiguration));
+    rtc_config.iceTransportPolicy = ICE_TRANSPORT_POLICY_ALL;
+
+    // Copy ICE server configs (STUN/TURN) obtained during signaling fetch
+    for (UINT32 i = 0; i < ice_config_count_; i++) {
+        for (UINT32 j = 0; j < ice_configs_[i].uriCount; j++) {
+            STRNCPY(rtc_config.iceServers[i].urls,
+                    ice_configs_[i].uris[j],
+                    MAX_ICE_CONFIG_URI_LEN);
+            STRNCPY(rtc_config.iceServers[i].credential,
+                    ice_configs_[i].password,
+                    MAX_ICE_CONFIG_CREDENTIAL_LEN);
+            STRNCPY(rtc_config.iceServers[i].username,
+                    ice_configs_[i].userName,
+                    MAX_ICE_CONFIG_USER_NAME_LEN);
+        }
+    }
+
+    // Create peer connection
+    PRtcPeerConnection peer_connection = nullptr;
+    STATUS retStatus = createPeerConnection(&rtc_config, &peer_connection);
+    if (retStatus != STATUS_SUCCESS) {
+        return;
+    }
+
+    // Set up video track: H.264
+    RtcMediaStreamTrack video_track;
+    MEMSET(&video_track, 0, SIZEOF(RtcMediaStreamTrack));
+    video_track.kind = MEDIA_STREAM_TRACK_KIND_VIDEO;
+    video_track.codec = RTC_CODEC_H264_PROFILE_42E01F_LEVEL_ASYMMETRY_ALLOWED_PACKETIZATION_MODE;
+    STRCPY(video_track.streamId, "smart-camera-video");
+    STRCPY(video_track.trackId, "smart-camera-video-track");
+
+    // Add video transceiver (SENDRECV direction)
+    PRtcRtpTransceiver video_transceiver = nullptr;
+    RtcRtpTransceiverInit video_init;
+    video_init.direction = RTC_RTP_TRANSCEIVER_DIRECTION_SENDRECV;
+    retStatus = addTransceiver(peer_connection, &video_track, &video_init,
+                               &video_transceiver);
+    if (retStatus != STATUS_SUCCESS) {
+        freePeerConnection(&peer_connection);
+        return;
+    }
+
+    // Set up audio track: OPUS (required for SDP negotiation even without audio)
+    RtcMediaStreamTrack audio_track;
+    MEMSET(&audio_track, 0, SIZEOF(RtcMediaStreamTrack));
+    audio_track.kind = MEDIA_STREAM_TRACK_KIND_AUDIO;
+    audio_track.codec = RTC_CODEC_OPUS;
+    STRCPY(audio_track.streamId, "smart-camera-audio");
+    STRCPY(audio_track.trackId, "smart-camera-audio-track");
+
+    // Add audio transceiver (SENDRECV direction)
+    PRtcRtpTransceiver audio_transceiver = nullptr;
+    RtcRtpTransceiverInit audio_init;
+    audio_init.direction = RTC_RTP_TRANSCEIVER_DIRECTION_SENDRECV;
+    retStatus = addTransceiver(peer_connection, &audio_track, &audio_init,
+                               &audio_transceiver);
+    if (retStatus != STATUS_SUCCESS) {
+        freePeerConnection(&peer_connection);
+        return;
+    }
+
+    // Build PeerInfo and allocate callback context before registering callbacks
+    PeerInfo peer;
+    peer.viewer_id = viewer_id;
+    peer.state = PeerInfo::State::CONNECTING;
+    peer.connected_at = std::chrono::steady_clock::now();
+    peer.peer_connection = peer_connection;
+    peer.video_track = video_track;
+    peer.audio_track = audio_track;
+    peer.video_transceiver = video_transceiver;
+    peer.audio_transceiver = audio_transceiver;
+    peer.callback_context = std::make_unique<PeerCallbackContext>();
+    peer.callback_context->agent = this;
+    peer.callback_context->viewer_id = viewer_id;
+
+    // Raw pointer for SDK callbacks — lifetime managed by PeerInfo::callback_context
+    auto* ctx = peer.callback_context.get();
+
+    // Register onIceCandidate callback (per peer connection)
+    retStatus = peerConnectionOnIceCandidate(
+        peer_connection, reinterpret_cast<UINT64>(ctx), on_ice_candidate);
+    if (retStatus != STATUS_SUCCESS) {
+        freePeerConnection(&peer_connection);
+        return;
+    }
+
+    // Register onConnectionStateChange callback (per peer connection)
+    retStatus = peerConnectionOnConnectionStateChange(
+        peer_connection, reinterpret_cast<UINT64>(ctx),
+        on_connection_state_change);
+    if (retStatus != STATUS_SUCCESS) {
+        freePeerConnection(&peer_connection);
+        return;
+    }
+
+    // Set remote description (the viewer's SDP offer)
+    RtcSessionDescriptionInit offer_sdp;
+    MEMSET(&offer_sdp, 0, SIZEOF(RtcSessionDescriptionInit));
+    offer_sdp.type = SDP_TYPE_OFFER;
+    STRNCPY(offer_sdp.sdp, sdp_offer.c_str(), MAX_SESSION_DESCRIPTION_INIT_SDP_LEN);
+
+    retStatus = setRemoteDescription(peer_connection, &offer_sdp);
+    if (retStatus != STATUS_SUCCESS) {
+        freePeerConnection(&peer_connection);
+        return;
+    }
+
+    // Create SDP answer
+    RtcSessionDescriptionInit answer_sdp;
+    MEMSET(&answer_sdp, 0, SIZEOF(RtcSessionDescriptionInit));
+    retStatus = createAnswer(peer_connection, &answer_sdp);
+    if (retStatus != STATUS_SUCCESS) {
+        freePeerConnection(&peer_connection);
+        return;
+    }
+
+    // Set local description
+    retStatus = setLocalDescription(peer_connection, &answer_sdp);
+    if (retStatus != STATUS_SUCCESS) {
+        freePeerConnection(&peer_connection);
+        return;
+    }
+
+    // Send SDP answer via signaling channel
+    {
+        SignalingMessage msg;
+        MEMSET(&msg, 0, SIZEOF(SignalingMessage));
+        msg.messageType = SIGNALING_MESSAGE_TYPE_ANSWER;
+        STRNCPY(msg.peerClientId, viewer_id.c_str(), MAX_SIGNALING_CLIENT_ID_LEN);
+        STRNCPY(msg.payload, answer_sdp.sdp, MAX_SIGNALING_MESSAGE_LEN);
+        msg.payloadLen = STRLEN(answer_sdp.sdp);  // CRITICAL: no null terminator
+        msg.version = SIGNALING_MESSAGE_CURRENT_VERSION;
+
+        std::lock_guard<std::mutex> send_lock(signaling_send_mutex_);
+        retStatus = signalingClientSendMessageSync(signaling_client_handle_, &msg);
+        if (retStatus != STATUS_SUCCESS) {
+            freePeerConnection(&peer_connection);
+            return;
+        }
+    }
+
+    // Store peer in the map
+    peers_[viewer_id] = std::move(peer);
+}
+
+void WebRTCAgent::handle_ice_candidate(const std::string& viewer_id,
+                                       const std::string& ice_candidate) {
+    std::unique_lock lock(mutex_);
+
+    // Find the peer in the map
+    auto it = peers_.find(viewer_id);
+    if (it == peers_.end()) {
+        return;
+    }
+
+    // Add the remote ICE candidate to the peer connection
+    RtcIceCandidateInit candidate_init;
+    MEMSET(&candidate_init, 0, SIZEOF(RtcIceCandidateInit));
+    STRNCPY(candidate_init.candidate, ice_candidate.c_str(),
+            MAX_ICE_CANDIDATE_INIT_CANDIDATE_LEN);
+
+    addIceCandidate(it->second.peer_connection, candidate_init.candidate);
+}
+
+// ============================================================
+// Static callbacks — forwarded to instance methods
+// ============================================================
+
+STATUS WebRTCAgent::on_signaling_message(UINT64 custom_data,
+                                          PReceivedSignalingMessage msg) {
+    auto* self = reinterpret_cast<WebRTCAgent*>(custom_data);
+    if (self == nullptr || msg == nullptr) {
+        return STATUS_NULL_ARG;
+    }
+
+    // Extract viewer_id and payload from the signaling message
+    std::string viewer_id(msg->signalingMessage.peerClientId);
+    std::string payload(msg->signalingMessage.payload,
+                        msg->signalingMessage.payloadLen);
+
+    // Dispatch based on message type
+    switch (msg->signalingMessage.messageType) {
+        case SIGNALING_MESSAGE_TYPE_OFFER:
+            self->handle_sdp_offer(viewer_id, payload);
+            break;
+
+        case SIGNALING_MESSAGE_TYPE_ICE_CANDIDATE:
+            self->handle_ice_candidate(viewer_id, payload);
+            break;
+
+        default:
+            // Ignore other message types (e.g., ANSWER — we are MASTER)
+            break;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+STATUS WebRTCAgent::on_signaling_state_changed(UINT64 custom_data,
+                                                SIGNALING_CLIENT_STATE state) {
+    auto* self = reinterpret_cast<WebRTCAgent*>(custom_data);
+    if (self == nullptr) {
+        return STATUS_NULL_ARG;
+    }
+
+    switch (state) {
+        case SIGNALING_CLIENT_STATE_CONNECTED:
+            self->signaling_connected_.store(true);
+            break;
+
+        case SIGNALING_CLIENT_STATE_DISCONNECTED:
+            self->signaling_connected_.store(false);
+
+            // Trigger reconnection if the agent is still running
+            if (self->running_.load()) {
+                bool expected = false;
+                if (self->reconnecting_.compare_exchange_strong(expected, true)) {
+                    // Launch reconnect thread only if not already running
+                    if (self->reconnect_thread_ &&
+                        self->reconnect_thread_->joinable()) {
+                        self->reconnect_thread_->join();
+                    }
+                    self->reconnect_thread_ = std::make_unique<std::thread>(
+                        &WebRTCAgent::signaling_reconnect_loop, self);
+                }
+            }
+            break;
+
+        default:
+            // Other states (NEW, GET_CREDENTIALS, DESCRIBE, CREATE,
+            // GET_ENDPOINT, GET_ICE_CONFIG, READY, CONNECTING) — no action needed
+            break;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+STATUS WebRTCAgent::on_signaling_error(UINT64 custom_data,
+                                        STATUS status,
+                                        PCHAR msg,
+                                        UINT32 msg_len) {
+    UNUSED_PARAM(custom_data);
+    UNUSED_PARAM(status);
+    UNUSED_PARAM(msg);
+    UNUSED_PARAM(msg_len);
+    return STATUS_SUCCESS;
+}
+
+STATUS WebRTCAgent::on_ice_candidate(UINT64 custom_data,
+                                      PCHAR candidate) {
+    auto* ctx = reinterpret_cast<PeerCallbackContext*>(custom_data);
+    if (ctx == nullptr || ctx->agent == nullptr) {
+        return STATUS_NULL_ARG;
+    }
+
+    // NULL candidate signals end of ICE gathering — nothing to send
+    if (candidate == nullptr) {
+        return STATUS_SUCCESS;
+    }
+
+    auto* self = ctx->agent;
+    const auto& viewer_id = ctx->viewer_id;
+
+    // Build signaling message with the local ICE candidate
+    SignalingMessage msg;
+    MEMSET(&msg, 0, SIZEOF(SignalingMessage));
+    msg.messageType = SIGNALING_MESSAGE_TYPE_ICE_CANDIDATE;
+    STRNCPY(msg.peerClientId, viewer_id.c_str(), MAX_SIGNALING_CLIENT_ID_LEN);
+    STRNCPY(msg.payload, candidate, MAX_SIGNALING_MESSAGE_LEN);
+    msg.payloadLen = STRLEN(msg.payload);  // CRITICAL: no null terminator
+    msg.version = SIGNALING_MESSAGE_CURRENT_VERSION;
+
+    // Send via signaling channel (mutex-protected)
+    std::lock_guard<std::mutex> send_lock(self->signaling_send_mutex_);
+    STATUS retStatus = signalingClientSendMessageSync(
+        self->signaling_client_handle_, &msg);
+    if (retStatus != STATUS_SUCCESS) {
+        // Log but don't fail — ICE can still succeed with other candidates
+        return retStatus;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+void WebRTCAgent::on_connection_state_change(UINT64 custom_data,
+                                              RTC_PEER_CONNECTION_STATE state) {
+    auto* ctx = reinterpret_cast<PeerCallbackContext*>(custom_data);
+    if (ctx == nullptr || ctx->agent == nullptr) {
+        return;
+    }
+
+    auto* self = ctx->agent;
+    const auto& viewer_id = ctx->viewer_id;
+
+    switch (state) {
+        case RTC_PEER_CONNECTION_STATE_CONNECTED: {
+            std::unique_lock lock(self->mutex_);
+            auto it = self->peers_.find(viewer_id);
+            if (it != self->peers_.end() &&
+                it->second.state == PeerInfo::State::CONNECTING) {
+                it->second.state = PeerInfo::State::CONNECTED;
+                it->second.connected_at = std::chrono::steady_clock::now();
+                self->viewer_count_.fetch_add(1);
+
+                // Notify viewer callback (outside lock would be ideal,
+                // but callback should be lightweight)
+                if (self->viewer_callback_) {
+                    self->viewer_callback_(viewer_id, true);
+                }
+            }
+            break;
+        }
+
+        case RTC_PEER_CONNECTION_STATE_DISCONNECTED:
+        case RTC_PEER_CONNECTION_STATE_FAILED:
+            self->remove_viewer(viewer_id);
+            break;
+
+        default:
+            // Other states (NEW, CONNECTING, CLOSING, CLOSED) — no action
+            break;
+    }
+}
+
+STATUS WebRTCAgent::get_credentials_callback(UINT64 custom_data,
+                                              PAwsCredentials credentials) {
+    auto* self = reinterpret_cast<WebRTCAgent*>(custom_data);
+    if (self == nullptr || credentials == nullptr) {
+        return STATUS_NULL_ARG;
+    }
+
+    // Get credentials from IoT authenticator
+    auto cred_result = self->auth_->get_credentials();
+    if (cred_result.is_err()) {
+        return STATUS_INVALID_OPERATION;
+    }
+
+    const auto& aws_creds = cred_result.value();
+
+    // Check if credential is expiring within 5 minutes (300 seconds)
+    auto now = std::chrono::system_clock::now();
+    auto remaining = std::chrono::duration_cast<std::chrono::seconds>(
+        aws_creds.expiration - now);
+
+    if (remaining.count() < kCredentialRefreshThresholdSec) {
+        // Force refresh to get new credentials before expiry
+        auto refresh_result = self->auth_->force_refresh();
+        if (refresh_result.is_ok()) {
+            // Re-fetch the refreshed credentials
+            auto refreshed = self->auth_->get_credentials();
+            if (refreshed.is_ok()) {
+                const auto& new_creds = refreshed.value();
+                STRNCPY(credentials->accessKeyId,
+                         new_creds.access_key_id.c_str(),
+                         MAX_ACCESS_KEY_LEN);
+                credentials->accessKeyIdLen = static_cast<UINT32>(
+                    new_creds.access_key_id.size());
+                STRNCPY(credentials->secretKey,
+                         new_creds.secret_access_key.c_str(),
+                         MAX_SECRET_KEY_LEN);
+                credentials->secretKeyLen = static_cast<UINT32>(
+                    new_creds.secret_access_key.size());
+                STRNCPY(credentials->sessionToken,
+                         new_creds.session_token.c_str(),
+                         MAX_SESSION_TOKEN_LEN);
+                credentials->sessionTokenLen = static_cast<UINT32>(
+                    new_creds.session_token.size());
+                auto exp_epoch = std::chrono::duration_cast<
+                    std::chrono::seconds>(
+                    new_creds.expiration.time_since_epoch());
+                credentials->expiration = static_cast<UINT64>(
+                    exp_epoch.count()) * HUNDREDS_OF_NANOS_IN_A_SECOND;
+                return STATUS_SUCCESS;
+            }
+        }
+        // If refresh failed, fall through and use the existing credentials
+    }
+
+    // Fill PAwsCredentials struct with current credentials
+    STRNCPY(credentials->accessKeyId,
+             aws_creds.access_key_id.c_str(),
+             MAX_ACCESS_KEY_LEN);
+    credentials->accessKeyIdLen = static_cast<UINT32>(
+        aws_creds.access_key_id.size());
+    STRNCPY(credentials->secretKey,
+             aws_creds.secret_access_key.c_str(),
+             MAX_SECRET_KEY_LEN);
+    credentials->secretKeyLen = static_cast<UINT32>(
+        aws_creds.secret_access_key.size());
+    STRNCPY(credentials->sessionToken,
+             aws_creds.session_token.c_str(),
+             MAX_SESSION_TOKEN_LEN);
+    credentials->sessionTokenLen = static_cast<UINT32>(
+        aws_creds.session_token.size());
+    auto exp_epoch = std::chrono::duration_cast<std::chrono::seconds>(
+        aws_creds.expiration.time_since_epoch());
+    credentials->expiration = static_cast<UINT64>(
+        exp_epoch.count()) * HUNDREDS_OF_NANOS_IN_A_SECOND;
+
+    return STATUS_SUCCESS;
 }
 
 #endif  // HAS_KVS_WEBRTC_SDK

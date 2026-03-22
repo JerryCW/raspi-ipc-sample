@@ -2,6 +2,7 @@
 // Initializes all modules in dependency order, registers shutdown steps,
 // and runs the main event loop until a signal requests shutdown.
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
@@ -9,6 +10,11 @@
 #include <mutex>
 #include <string>
 #include <thread>
+
+#ifdef HAS_GSTREAMER
+#include <gst/app/gstappsink.h>
+#include <gst/gst.h>
+#endif
 
 #include "ai/ai_pipeline.h"
 #include "auth/iot_authenticator.h"
@@ -302,6 +308,11 @@ int main(int argc, char* argv[]) {
 
     // ── Shutdown Handler ────────────────────────────────────
     log_init_step("ShutdownHandler");
+
+    // Frame pull thread state — declared here so shutdown lambdas can capture them
+    std::atomic<bool> frame_pull_running{false};
+    std::unique_ptr<std::thread> frame_pull_thread;
+
     ShutdownHandler shutdown_handler;
     {
         auto res = shutdown_handler.register_signal_handlers();
@@ -341,6 +352,15 @@ int main(int argc, char* argv[]) {
         bitrate_ctrl->stop();
         return true;
     });
+    shutdown_handler.add_step("WebRTC_FramePull", [&]() {
+        // Stop frame pull thread BEFORE stopping WebRTC signaling
+        // to ensure no frames are sent to a closed WebRTC_Agent
+        frame_pull_running.store(false);
+        if (frame_pull_thread && frame_pull_thread->joinable()) {
+            frame_pull_thread->join();
+        }
+        return true;
+    });
     shutdown_handler.add_step("WebRTC_Agent", [&]() {
         webrtc->stop_signaling();
         return true;
@@ -369,6 +389,92 @@ int main(int argc, char* argv[]) {
             return EXIT_FAILURE;
         }
     }
+
+    // ── Start WebRTC signaling ──────────────────────────────
+    {
+        auto res = webrtc->start_signaling();
+        if (res.is_err()) {
+            log_mgr->log(LogLevel::WARNING, "main",
+                "WebRTC signaling start failed: " + res.error().message);
+        } else {
+            log_mgr->log(LogLevel::INFO, "main", "WebRTC signaling started");
+        }
+    }
+
+    // ── Frame pull thread (GStreamer appsink → WebRTC) ──────
+#ifdef HAS_GSTREAMER
+    {
+        // Get the webrtc_sink appsink element from the pipeline
+        GstElement* pipeline_element = gst_pipeline->get_pipeline_element();
+        GstElement* appsink = nullptr;
+        if (pipeline_element) {
+            appsink = gst_bin_get_by_name(GST_BIN(pipeline_element), "webrtc_sink");
+        }
+
+        if (appsink && GST_IS_APP_SINK(appsink)) {
+            frame_pull_running.store(true);
+            frame_pull_thread = std::make_unique<std::thread>(
+                [&webrtc, &log_mgr, &frame_pull_running, appsink]() {
+                    log_mgr->log(LogLevel::INFO, "main", "Frame pull thread started");
+
+                    while (frame_pull_running.load() &&
+                           !ShutdownHandler::shutdown_requested()) {
+                        // Skip frame pull when no viewers are connected (save CPU)
+                        if (webrtc->active_viewer_count() == 0) {
+                            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                            continue;
+                        }
+
+                        // Pull sample from appsink (100ms timeout)
+                        GstSample* sample = gst_app_sink_try_pull_sample(
+                            GST_APP_SINK(appsink), 100 * GST_MSECOND);
+                        if (!sample) {
+                            continue;
+                        }
+
+                        GstBuffer* buffer = gst_sample_get_buffer(sample);
+                        if (buffer) {
+                            GstMapInfo map;
+                            if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+                                uint64_t timestamp_us = 0;
+                                if (GST_BUFFER_PTS_IS_VALID(buffer)) {
+                                    timestamp_us = GST_BUFFER_PTS(buffer) / 1000;  // ns → µs
+                                }
+
+                                auto res = webrtc->send_frame(
+                                    map.data, map.size, timestamp_us);
+                                if (res.is_err()) {
+                                    log_mgr->log(LogLevel::WARNING, "main",
+                                        "send_frame failed: " + res.error().message);
+                                }
+
+                                // RAII: always unmap
+                                gst_buffer_unmap(buffer, &map);
+                            }
+                        }
+
+                        gst_sample_unref(sample);
+                    }
+
+                    log_mgr->log(LogLevel::INFO, "main", "Frame pull thread stopped");
+                });
+
+            log_mgr->log(LogLevel::INFO, "main",
+                "Frame pull thread launched for webrtc_sink appsink");
+        } else {
+            log_mgr->log(LogLevel::WARNING, "main",
+                "webrtc_sink appsink not found — frame pull thread not started");
+        }
+
+        // Release our ref to appsink (pipeline still holds one)
+        if (appsink) {
+            gst_object_unref(appsink);
+        }
+    }
+#else
+    log_mgr->log(LogLevel::INFO, "main",
+        "GStreamer not available — frame pull thread disabled");
+#endif
 
     log_mgr->log(LogLevel::INFO, "main", "All modules initialized — entering main loop");
     std::cerr << "[init] All modules initialized — entering main loop" << std::endl;

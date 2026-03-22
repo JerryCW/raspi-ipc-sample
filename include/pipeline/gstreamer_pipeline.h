@@ -78,8 +78,8 @@ public:
 
 #ifdef HAS_GSTREAMER
     // Access underlying GstElement pipeline (for appsink frame pull, etc.)
-    // Returns nullptr if pipeline not built or GStreamer not available.
-    virtual GstElement* get_pipeline_element() = 0;
+    // Default returns nullptr; GStreamerPipeline overrides with real pipeline.
+    virtual GstElement* get_pipeline_element() { return nullptr; }
 #endif
 };
 

@@ -361,9 +361,37 @@ VoidResult WebRTCAgent::initialize(const WebRTCConfig& config,
     signaling_callbacks_.stateChangeFn = on_signaling_state_changed;
     signaling_callbacks_.errorReportFn = on_signaling_error;
 
-    // Step 5: Register credential provider callback
-    // Credentials are provided via the IoT credential provider mechanism
-    // configured through ChannelInfo, not via signaling callbacks
+    // Step 5: Create credential provider from IoT authenticator
+    // Get STS credentials and create a static credential provider for the SDK
+    {
+        auto cred_result = auth_->get_credentials();
+        if (cred_result.is_ok()) {
+            const auto& creds = cred_result.value();
+            auto exp_epoch = std::chrono::duration_cast<std::chrono::seconds>(
+                creds.expiration.time_since_epoch());
+            UINT64 expiration_100ns = static_cast<UINT64>(exp_epoch.count()) *
+                                      HUNDREDS_OF_NANOS_IN_A_SECOND;
+            retStatus = createStaticCredentialProvider(
+                const_cast<PCHAR>(creds.access_key_id.c_str()), 0,
+                const_cast<PCHAR>(creds.secret_access_key.c_str()), 0,
+                const_cast<PCHAR>(creds.session_token.c_str()), 0,
+                expiration_100ns,
+                &credential_provider_);
+            if (retStatus != STATUS_SUCCESS) {
+                deinitKvsWebRtc();
+                return ErrVoid(ErrorCode::WebRTCSignalingFailed,
+                               "Failed to create credential provider, status: " +
+                                   std::to_string(retStatus),
+                               "WebRTCAgent::initialize");
+            }
+        } else {
+            deinitKvsWebRtc();
+            return ErrVoid(ErrorCode::WebRTCSignalingFailed,
+                           "Failed to get credentials for WebRTC: " +
+                               cred_result.error().message,
+                           "WebRTCAgent::initialize");
+        }
+    }
 
     // Step 6: Create signaling client
     retStatus = createSignalingClientSync(&client_info_, &channel_info_,
@@ -648,6 +676,12 @@ void WebRTCAgent::shutdown_sequence() {
         if (retStatus != STATUS_SUCCESS) {
             // WARNING: freeSignalingClient failed — continue (Req 9.6)
         }
+    }
+
+    // Step 5.5: Free credential provider
+    if (credential_provider_ != nullptr) {
+        freeStaticCredentialProvider(&credential_provider_);
+        credential_provider_ = nullptr;
     }
 
     // Step 6: Deinit KVS WebRTC SDK (Req 9.1)

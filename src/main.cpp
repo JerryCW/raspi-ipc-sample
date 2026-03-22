@@ -69,10 +69,13 @@ int main(int argc, char* argv[]) {
     // Load config file if --config is provided, otherwise use defaults
     AppConfig config{};
     std::string config_path;
+    bool webrtc_only = false;
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--config" && i + 1 < argc) {
             config_path = argv[++i];
+        } else if (arg == "--webrtc-only") {
+            webrtc_only = true;
         }
     }
 
@@ -131,6 +134,61 @@ int main(int argc, char* argv[]) {
             log_mgr->log(LogLevel::WARNING, "main",
                 "Continuing without IoT authentication (non-production profile)");
         }
+    }
+
+    // ── WebRTC-only mode ───────────────────────────────────
+    // When --webrtc-only is passed, skip GStreamer/KVS/monitors and only
+    // run WebRTC signaling for debugging. Prints detailed step-by-step logs.
+    if (webrtc_only) {
+        log_mgr->log(LogLevel::INFO, "main", "=== WebRTC-only debug mode ===");
+        std::cerr << "[webrtc-only] Channel:  " << config.webrtc.channel_name << std::endl;
+        std::cerr << "[webrtc-only] Region:   " << config.webrtc.region << std::endl;
+        std::cerr << "[webrtc-only] Thing:    " << config.iot.thing_name << std::endl;
+        std::cerr << "[webrtc-only] Cert:     " << config.iot.cert_path << std::endl;
+        std::cerr << "[webrtc-only] Key:      " << config.iot.key_path << std::endl;
+        std::cerr << "[webrtc-only] CA:       " << config.iot.root_ca_path << std::endl;
+        std::cerr << "[webrtc-only] Endpoint: " << config.iot.credential_endpoint << std::endl;
+        std::cerr << "[webrtc-only] Role:     " << config.iot.role_alias << std::endl;
+
+        log_init_step("WebRTC_Agent (webrtc-only)");
+        auto webrtc = std::shared_ptr<IWebRTCAgent>(
+            create_webrtc_agent().release());
+        {
+            auto res = webrtc->initialize(config.webrtc, iot_auth);
+            if (res.is_err()) {
+                std::cerr << "[webrtc-only] FAILED: WebRTC init — " << res.error().message << std::endl;
+                return EXIT_FAILURE;
+            }
+            std::cerr << "[webrtc-only] OK: WebRTC initialized" << std::endl;
+        }
+
+        {
+            auto res = webrtc->start_signaling();
+            if (res.is_err()) {
+                std::cerr << "[webrtc-only] FAILED: start_signaling — " << res.error().message << std::endl;
+                return EXIT_FAILURE;
+            }
+            std::cerr << "[webrtc-only] OK: signaling started, connected="
+                      << (webrtc->is_signaling_connected() ? "true" : "false") << std::endl;
+        }
+
+        std::cerr << "[webrtc-only] Waiting for viewer connections... (Ctrl+C to exit)" << std::endl;
+
+        // Register signal handler for clean shutdown
+        ShutdownHandler shutdown_handler;
+        shutdown_handler.register_signal_handlers();
+
+        while (!ShutdownHandler::shutdown_requested()) {
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            std::cerr << "[webrtc-only] heartbeat: connected="
+                      << (webrtc->is_signaling_connected() ? "true" : "false")
+                      << " viewers=" << webrtc->active_viewer_count() << std::endl;
+        }
+
+        std::cerr << "[webrtc-only] Shutting down..." << std::endl;
+        webrtc->stop_signaling();
+        std::cerr << "[webrtc-only] Done." << std::endl;
+        return EXIT_SUCCESS;
     }
 
     // ── 4. Camera_Source ────────────────────────────────────

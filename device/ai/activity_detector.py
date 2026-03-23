@@ -95,7 +95,15 @@ class ActivityDetector:
             try:
                 notif = self.ipc.receive_notification()
                 raw = self.ipc.read_frame(notif)
-                frame = raw.reshape((notif.height, notif.width, 3))
+
+                # Convert from NV12/YUV to BGR for YOLO
+                if notif.pixel_format == "NV12":
+                    yuv = raw.reshape((notif.height * 3 // 2, notif.width))
+                    frame = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV12)
+                else:
+                    # Fallback: assume raw BGR
+                    frame = raw.reshape((notif.height, notif.width, 3))
+
                 self.process_frame(frame, notif.timestamp_ms)
             except ConnectionError:
                 logger.warning("IPC connection lost, reconnecting…")

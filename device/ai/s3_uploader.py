@@ -283,7 +283,26 @@ def main() -> None:
     )
     config = DetectorConfig.from_ini(config_path)
     device_id = os.environ.get("DEVICE_ID", "unknown")
-    uploader = S3Uploader(config, device_id=device_id)
+
+    # Try IoT credential provider first, fall back to default boto3 chain
+    s3_client = None
+    dynamodb_resource = None
+    try:
+        from device.ai.iot_credential_provider import load_iot_config, create_iot_boto3_session
+        iot_config = load_iot_config(config_path)
+        if iot_config.credential_endpoint and iot_config.cert_path:
+            session = create_iot_boto3_session(iot_config)
+            s3_client = session.client("s3")
+            dynamodb_resource = session.resource("dynamodb")
+            logger.info("Using IoT credential provider for AWS access")
+    except Exception as exc:
+        logger.warning("IoT credential provider failed, falling back to default: %s", exc)
+
+    uploader = S3Uploader(
+        config, device_id=device_id,
+        s3_client=s3_client,
+        dynamodb_resource=dynamodb_resource,
+    )
     uploader.run()
 
 

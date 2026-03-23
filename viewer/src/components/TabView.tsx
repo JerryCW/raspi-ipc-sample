@@ -2,8 +2,9 @@ import { useState, useCallback } from 'react';
 import type { AWSCredentials, Fragment } from '../types';
 import { WebRTCPanel } from './WebRTCPanel';
 import { HLSPanel } from './HLSPanel';
+import { EventsPanel } from './EventsPanel';
 
-type TabId = 'webrtc' | 'hls';
+type TabId = 'webrtc' | 'hls' | 'events';
 
 interface Tab {
   id: TabId;
@@ -13,6 +14,7 @@ interface Tab {
 const TABS: Tab[] = [
   { id: 'webrtc', label: '实时查看' },
   { id: 'hls', label: '录像回放' },
+  { id: 'events', label: '活动事件' },
 ];
 
 interface TabViewProps {
@@ -21,17 +23,26 @@ interface TabViewProps {
   credentials: AWSCredentials | null;
   region: string;
   preloadedFragments?: Fragment[];
+  idToken: string | null;
 }
 
 /**
- * Tab container that switches between WebRTC live view and HLS playback.
+ * Tab container that switches between WebRTC live view, HLS playback,
+ * and activity events.
  *
- * Both panels are always mounted — switching tabs only toggles visibility via CSS.
- * This preserves connection state (WebRTC/HLS keep playing in background).
+ * Both WebRTC and HLS panels are always mounted — switching tabs only
+ * toggles visibility via CSS. EventsPanel is also always mounted.
  *
- * Validates: Requirements 5.1, 5.2, 5.3
+ * Validates: Requirements 5.1, 5.2, 5.3, 5.4
  */
-export function TabView({ channelName, streamName, credentials, region, preloadedFragments }: TabViewProps) {
+export function TabView({
+  channelName,
+  streamName,
+  credentials,
+  region,
+  preloadedFragments,
+  idToken,
+}: TabViewProps) {
   const [activeTab, setActiveTab] = useState<TabId>('webrtc');
 
   const handleTabChange = useCallback(
@@ -40,6 +51,24 @@ export function TabView({ channelName, streamName, credentials, region, preloade
       setActiveTab(tab);
     },
     [activeTab],
+  );
+
+  /** Jump to HLS playback for a given time range (called from EventsPanel). */
+  const handleJumpToPlayback = useCallback(
+    (startMs: number, endMs: number) => {
+      setActiveTab('hls');
+      // HLSPanel's start() expects Date objects — trigger via Timeline's onTimeSelect
+      // We use a small delay to ensure the HLS panel is visible before starting playback
+      setTimeout(() => {
+        const startDate = new Date(startMs);
+        const endDate = new Date(endMs);
+        // Dispatch a custom event that HLSPanel can listen to
+        window.dispatchEvent(
+          new CustomEvent('hls-jump-to-range', { detail: { start: startDate, end: endDate } }),
+        );
+      }, 100);
+    },
+    [],
   );
 
   return (
@@ -61,7 +90,7 @@ export function TabView({ channelName, streamName, credentials, region, preloade
         ))}
       </div>
 
-      {/* Both panels always mounted, toggle visibility with CSS */}
+      {/* All panels always mounted, toggle visibility with CSS */}
       <div className={activeTab === 'webrtc' ? '' : 'hidden'}>
         <WebRTCPanel
           channelName={channelName}
@@ -75,6 +104,12 @@ export function TabView({ channelName, streamName, credentials, region, preloade
           credentials={credentials}
           region={region}
           preloadedFragments={preloadedFragments}
+        />
+      </div>
+      <div className={activeTab === 'events' ? '' : 'hidden'}>
+        <EventsPanel
+          idToken={idToken}
+          onJumpToPlayback={handleJumpToPlayback}
         />
       </div>
     </div>

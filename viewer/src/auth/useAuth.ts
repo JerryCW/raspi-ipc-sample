@@ -74,6 +74,7 @@ function clearStorage(): void {
 export function useAuth(): {
   isAuthenticated: boolean;
   isLoading: boolean;
+  tokens: CognitoTokens | null;
   credentials: AWSCredentials | null;
   login: () => void;
   loginWithPassword: (username: string, password: string) => Promise<void>;
@@ -81,6 +82,7 @@ export function useAuth(): {
   error: string | null;
 } {
   const [isLoading, setIsLoading] = useState(true);
+  const [tokens, setTokens] = useState<CognitoTokens | null>(null);
   const [credentials, setCredentials] = useState<AWSCredentials | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -127,6 +129,7 @@ export function useAuth(): {
       try {
         const newTokens = await refreshTokens(currentTokens.refreshToken);
         tokensRef.current = newTokens;
+        setTokens(newTokens);
         saveTokens(newTokens);
         const creds = await obtainCredentials(newTokens);
         if (creds) {
@@ -138,6 +141,7 @@ export function useAuth(): {
         // Refresh failed — clear state so user can re-login
         clearStorage();
         tokensRef.current = null;
+        setTokens(null);
         setCredentials(null);
       }
     },
@@ -184,6 +188,7 @@ export function useAuth(): {
 
           const newTokens = await exchangeCodeForTokens(authCode);
           tokensRef.current = newTokens;
+          setTokens(newTokens);
           saveTokens(newTokens);
 
           const creds = await obtainCredentials(newTokens);
@@ -201,6 +206,7 @@ export function useAuth(): {
         }
 
         tokensRef.current = storedTokens;
+        setTokens(storedTokens);
 
         // Check if we have cached credentials that are still valid
         const storedCreds = loadCredentials();
@@ -244,6 +250,7 @@ export function useAuth(): {
     try {
       const newTokens = await signInWithPassword(username, password);
       tokensRef.current = newTokens;
+      setTokens(newTokens);
       saveTokens(newTokens);
       const creds = await obtainCredentials(newTokens);
       if (creds) {
@@ -261,6 +268,7 @@ export function useAuth(): {
     clearRefreshTimer();
     clearStorage();
     tokensRef.current = null;
+    setTokens(null);
     setCredentials(null);
     setError(null);
     window.location.href = buildLogoutUrl();
@@ -269,6 +277,7 @@ export function useAuth(): {
   return {
     isAuthenticated,
     isLoading,
+    tokens,
     credentials,
     login,
     loginWithPassword,

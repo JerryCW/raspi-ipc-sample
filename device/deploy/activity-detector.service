@@ -1,0 +1,15 @@
+[Unit]
+Description=Smart Camera Activity Detector (YOLOv8n)
+After=smart-camera.service
+Requires=smart-camera.service
+
+[Service]
+Type=simple
+ExecStart=/opt/smart-camera/ai/run_detector.sh
+WorkingDirectory=/opt/smart-camera
+Restart=on-failure
+RestartSec=5
+Environment=AI_SUMMARY_CONFIG_PATH=/etc/smart-camera/config.ini
+
+[Install]
+WantedBy=multi-user.target

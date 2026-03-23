@@ -13,7 +13,7 @@ import type { Fragment } from '../types';
  * Preloads today's fragments as soon as credentials are available.
  */
 export function ViewerPage() {
-  const { credentials, logout } = useAuth();
+  const { credentials, tokens, logout } = useAuth();
 
   const [region, setRegion] = useState(env.defaultRegion);
   const [channelName, setChannelName] = useState(env.defaultChannelName);
@@ -50,6 +50,7 @@ export function ViewerPage() {
           credentials={credentials}
           region={region}
           preloadedFragments={preloadedFragments}
+          idToken={tokens?.idToken ?? null}
         />
       </div>
     </Layout>

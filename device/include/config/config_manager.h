@@ -68,6 +68,37 @@ struct WebRTCConfig {
 };
 
 // ============================================================
+// AISummaryConfig — AI video summary parameters
+// ============================================================
+
+struct AISummaryConfig {
+    // FrameExporter
+    double export_fps = 2.0;
+    std::string shm_name = "/smart_camera_frames";
+    uint32_t shm_size_mb = 20;
+    std::string socket_path = "/tmp/smart_camera_ai.sock";
+
+    // Activity Detector
+    std::string detect_classes = "person,cat,dog,bird";
+    double confidence_threshold = 0.5;
+    uint32_t session_timeout_sec = 60;
+    std::string capture_dir = "/var/lib/smart-camera/captures/";
+    uint32_t capture_max_files = 500;
+    uint32_t capture_max_size_mb = 200;
+    uint32_t disk_min_free_mb = 100;
+
+    // S3 Uploader
+    std::string s3_bucket = "smart-camera-captures";
+    std::string s3_prefix = "captures";
+    uint32_t upload_retry_count = 5;
+    uint32_t upload_retry_interval_sec = 1;
+
+    // DynamoDB
+    std::string dynamodb_table = "smart-camera-events";
+    uint32_t event_ttl_days = 90;
+};
+
+// ============================================================
 // AppConfig — complete application configuration
 // ============================================================
 
@@ -111,6 +142,9 @@ struct AppConfig {
 
     // AI
     uint32_t ai_model_timeout_sec = 5;
+
+    // AI Summary
+    AISummaryConfig ai_summary;
 
     // Profile
     std::string profile = "default";

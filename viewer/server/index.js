@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { verifyJwt, getEvents, getThumbnail } from './events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -14,7 +15,11 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-// Removed API endpoints — return 404 (credentials and signing moved to client-side Cognito)
+// Events API — protected by JWT
+app.get('/api/events', verifyJwt, getEvents);
+app.get('/api/events/:sessionId/thumbnail', verifyJwt, getThumbnail);
+
+// Catch-all for unknown API routes — return 404
 app.all('/api/{*splat}', (_req, res) => {
   res.status(404).json({ error: 'Not Found' });
 });

@@ -101,3 +101,17 @@ export interface EnvConfig {
   defaultChannelName: string;
   defaultStreamName: string;
 }
+
+// ===== 活动事件相关 =====
+
+export interface ActivityEvent {
+  sessionId: string;
+  eventTimestamp: string;
+  detectedClass: 'person' | 'cat' | 'dog' | 'bird';
+  maxConfidence: number;
+  durationSeconds: number;
+  kvsStartTimestamp: number;
+  kvsEndTimestamp: number;
+  detectionCount: number;
+  thumbnailUrl?: string;
+}

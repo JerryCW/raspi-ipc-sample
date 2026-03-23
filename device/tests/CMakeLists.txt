@@ -8,9 +8,9 @@ add_executable(test_types test_types.cpp)
 target_link_libraries(test_types PRIVATE GTest::gtest_main)
 gtest_discover_tests(test_types)
 
-# test_config_manager — unit tests for ConfigManager
+# test_config_manager — unit tests + property tests for ConfigManager
 add_executable(test_config_manager test_config_manager.cpp)
-target_link_libraries(test_config_manager PRIVATE config_manager GTest::gtest_main)
+target_link_libraries(test_config_manager PRIVATE config_manager rapidcheck rapidcheck_gtest GTest::gtest_main)
 gtest_discover_tests(test_config_manager)
 
 # test_log_manager — unit tests for LogManager
@@ -77,6 +77,11 @@ gtest_discover_tests(test_frame_buffer_pool)
 add_executable(test_video_producer test_video_producer.cpp)
 target_link_libraries(test_video_producer PRIVATE video_producer GTest::gtest_main)
 gtest_discover_tests(test_video_producer)
+
+# test_frame_exporter — unit tests + property tests for FrameExporter
+add_executable(test_frame_exporter test_frame_exporter.cpp)
+target_link_libraries(test_frame_exporter PRIVATE frame_exporter frame_buffer_pool GTest::gtest_main rapidcheck rapidcheck_gtest)
+gtest_discover_tests(test_frame_exporter)
 
 # test_ai_pipeline — unit tests for AI_Pipeline
 add_executable(test_ai_pipeline test_ai_pipeline.cpp)

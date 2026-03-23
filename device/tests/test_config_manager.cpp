@@ -983,3 +983,281 @@ TEST(ConfigManagerParse, FullMultiSectionConfig) {
     EXPECT_EQ(c.frame_pool_size, 50u);
     EXPECT_EQ(c.ai_model_timeout_sec, 3u);
 }
+
+// ============================================================
+// AISummaryConfig — defaults
+// ============================================================
+
+TEST(AISummaryConfigDefaults, CorrectDefaults) {
+    AISummaryConfig ai;
+    EXPECT_DOUBLE_EQ(ai.export_fps, 2.0);
+    EXPECT_EQ(ai.shm_name, "/smart_camera_frames");
+    EXPECT_EQ(ai.shm_size_mb, 20u);
+    EXPECT_EQ(ai.socket_path, "/tmp/smart_camera_ai.sock");
+    EXPECT_EQ(ai.detect_classes, "person,cat,dog,bird");
+    EXPECT_DOUBLE_EQ(ai.confidence_threshold, 0.5);
+    EXPECT_EQ(ai.session_timeout_sec, 60u);
+    EXPECT_EQ(ai.capture_dir, "/var/lib/smart-camera/captures/");
+    EXPECT_EQ(ai.capture_max_files, 500u);
+    EXPECT_EQ(ai.capture_max_size_mb, 200u);
+    EXPECT_EQ(ai.disk_min_free_mb, 100u);
+    EXPECT_EQ(ai.s3_bucket, "smart-camera-captures");
+    EXPECT_EQ(ai.s3_prefix, "captures");
+    EXPECT_EQ(ai.upload_retry_count, 5u);
+    EXPECT_EQ(ai.upload_retry_interval_sec, 1u);
+    EXPECT_EQ(ai.dynamodb_table, "smart-camera-events");
+    EXPECT_EQ(ai.event_ttl_days, 90u);
+}
+
+TEST(AppConfigDefaults, AISummaryFieldPresent) {
+    AppConfig config;
+    EXPECT_DOUBLE_EQ(config.ai_summary.export_fps, 2.0);
+    EXPECT_EQ(config.ai_summary.shm_name, "/smart_camera_frames");
+    EXPECT_EQ(config.ai_summary.event_ttl_days, 90u);
+}
+
+// ============================================================
+// parse() — [ai_summary] section
+// ============================================================
+
+TEST(ConfigManagerParse, AISummarySectionAllFields) {
+    ConfigManager cm;
+    std::string content =
+        "[ai_summary]\n"
+        "export_fps = 5.0\n"
+        "shm_name = /test_shm\n"
+        "shm_size_mb = 40\n"
+        "socket_path = /tmp/test.sock\n"
+        "detect_classes = person,bird\n"
+        "confidence_threshold = 0.7\n"
+        "session_timeout_sec = 120\n"
+        "capture_dir = /tmp/captures/\n"
+        "capture_max_files = 1000\n"
+        "capture_max_size_mb = 400\n"
+        "disk_min_free_mb = 200\n"
+        "s3_bucket = my-bucket\n"
+        "s3_prefix = my-prefix\n"
+        "upload_retry_count = 10\n"
+        "upload_retry_interval_sec = 3\n"
+        "dynamodb_table = my-table\n"
+        "event_ttl_days = 30\n";
+    auto result = cm.parse(content);
+    ASSERT_TRUE(result.is_ok());
+    const auto& ai = result.value().ai_summary;
+    EXPECT_DOUBLE_EQ(ai.export_fps, 5.0);
+    EXPECT_EQ(ai.shm_name, "/test_shm");
+    EXPECT_EQ(ai.shm_size_mb, 40u);
+    EXPECT_EQ(ai.socket_path, "/tmp/test.sock");
+    EXPECT_EQ(ai.detect_classes, "person,bird");
+    EXPECT_DOUBLE_EQ(ai.confidence_threshold, 0.7);
+    EXPECT_EQ(ai.session_timeout_sec, 120u);
+    EXPECT_EQ(ai.capture_dir, "/tmp/captures/");
+    EXPECT_EQ(ai.capture_max_files, 1000u);
+    EXPECT_EQ(ai.capture_max_size_mb, 400u);
+    EXPECT_EQ(ai.disk_min_free_mb, 200u);
+    EXPECT_EQ(ai.s3_bucket, "my-bucket");
+    EXPECT_EQ(ai.s3_prefix, "my-prefix");
+    EXPECT_EQ(ai.upload_retry_count, 10u);
+    EXPECT_EQ(ai.upload_retry_interval_sec, 3u);
+    EXPECT_EQ(ai.dynamodb_table, "my-table");
+    EXPECT_EQ(ai.event_ttl_days, 30u);
+}
+
+TEST(ConfigManagerParse, AISummaryPartialOverride) {
+    ConfigManager cm;
+    std::string content =
+        "[ai_summary]\n"
+        "export_fps = 10\n"
+        "s3_bucket = custom-bucket\n";
+    auto result = cm.parse(content);
+    ASSERT_TRUE(result.is_ok());
+    const auto& ai = result.value().ai_summary;
+    // Overridden values
+    EXPECT_DOUBLE_EQ(ai.export_fps, 10.0);
+    EXPECT_EQ(ai.s3_bucket, "custom-bucket");
+    // Defaults preserved
+    EXPECT_EQ(ai.shm_name, "/smart_camera_frames");
+    EXPECT_EQ(ai.event_ttl_days, 90u);
+    EXPECT_DOUBLE_EQ(ai.confidence_threshold, 0.5);
+}
+
+TEST(ConfigManagerParse, AISummaryInvalidNumericFallback) {
+    ConfigManager cm;
+    std::string content =
+        "[ai_summary]\n"
+        "export_fps = not_a_number\n"
+        "shm_size_mb = abc\n"
+        "confidence_threshold = xyz\n";
+    auto result = cm.parse(content);
+    ASSERT_TRUE(result.is_ok());
+    const auto& ai = result.value().ai_summary;
+    EXPECT_DOUBLE_EQ(ai.export_fps, 2.0);
+    EXPECT_EQ(ai.shm_size_mb, 20u);
+    EXPECT_DOUBLE_EQ(ai.confidence_threshold, 0.5);
+}
+
+// ============================================================
+// format() — [ai_summary] section present
+// ============================================================
+
+TEST(ConfigManagerFormat, OutputContainsAISummarySection) {
+    ConfigManager cm;
+    AppConfig config;
+    config.ai_summary.s3_bucket = "test-bucket";
+    config.ai_summary.dynamodb_table = "test-table";
+
+    std::string output = cm.format(config);
+    EXPECT_NE(output.find("[ai_summary]"), std::string::npos);
+    EXPECT_NE(output.find("test-bucket"), std::string::npos);
+    EXPECT_NE(output.find("test-table"), std::string::npos);
+    EXPECT_NE(output.find("export_fps"), std::string::npos);
+    EXPECT_NE(output.find("confidence_threshold"), std::string::npos);
+}
+
+// ============================================================
+// Round-trip — [ai_summary] section
+// ============================================================
+
+TEST(ConfigManagerRoundTrip, AISummaryRoundTrip) {
+    ConfigManager cm;
+    AppConfig original;
+    original.ai_summary.export_fps = 4.0;
+    original.ai_summary.shm_name = "/custom_shm";
+    original.ai_summary.shm_size_mb = 32;
+    original.ai_summary.socket_path = "/tmp/custom.sock";
+    original.ai_summary.detect_classes = "person,dog";
+    original.ai_summary.confidence_threshold = 0.8;
+    original.ai_summary.session_timeout_sec = 90;
+    original.ai_summary.capture_dir = "/tmp/test_captures/";
+    original.ai_summary.capture_max_files = 250;
+    original.ai_summary.capture_max_size_mb = 100;
+    original.ai_summary.disk_min_free_mb = 50;
+    original.ai_summary.s3_bucket = "roundtrip-bucket";
+    original.ai_summary.s3_prefix = "roundtrip-prefix";
+    original.ai_summary.upload_retry_count = 3;
+    original.ai_summary.upload_retry_interval_sec = 2;
+    original.ai_summary.dynamodb_table = "roundtrip-table";
+    original.ai_summary.event_ttl_days = 45;
+
+    std::string formatted = cm.format(original);
+    auto result = cm.parse(formatted);
+    ASSERT_TRUE(result.is_ok());
+    const auto& rt = result.value().ai_summary;
+
+    EXPECT_DOUBLE_EQ(rt.export_fps, original.ai_summary.export_fps);
+    EXPECT_EQ(rt.shm_name, original.ai_summary.shm_name);
+    EXPECT_EQ(rt.shm_size_mb, original.ai_summary.shm_size_mb);
+    EXPECT_EQ(rt.socket_path, original.ai_summary.socket_path);
+    EXPECT_EQ(rt.detect_classes, original.ai_summary.detect_classes);
+    EXPECT_DOUBLE_EQ(rt.confidence_threshold, original.ai_summary.confidence_threshold);
+    EXPECT_EQ(rt.session_timeout_sec, original.ai_summary.session_timeout_sec);
+    EXPECT_EQ(rt.capture_dir, original.ai_summary.capture_dir);
+    EXPECT_EQ(rt.capture_max_files, original.ai_summary.capture_max_files);
+    EXPECT_EQ(rt.capture_max_size_mb, original.ai_summary.capture_max_size_mb);
+    EXPECT_EQ(rt.disk_min_free_mb, original.ai_summary.disk_min_free_mb);
+    EXPECT_EQ(rt.s3_bucket, original.ai_summary.s3_bucket);
+    EXPECT_EQ(rt.s3_prefix, original.ai_summary.s3_prefix);
+    EXPECT_EQ(rt.upload_retry_count, original.ai_summary.upload_retry_count);
+    EXPECT_EQ(rt.upload_retry_interval_sec, original.ai_summary.upload_retry_interval_sec);
+    EXPECT_EQ(rt.dynamodb_table, original.ai_summary.dynamodb_table);
+    EXPECT_EQ(rt.event_ttl_days, original.ai_summary.event_ttl_days);
+}
+
+// ============================================================
+// RapidCheck Property Test — ai_summary config round-trip
+// Feature: ai-video-summary, Property 21: 配置解析往返
+// Validates: Requirements 8.1, 8.2, 8.3
+// ============================================================
+
+#include <rapidcheck.h>
+#include <rapidcheck/gtest.h>
+#include <cmath>
+
+TEST(ConfigManagerProperty, AISummaryConfigRoundTrip) {
+    rc::check(
+        "Feature: ai-video-summary, Property 21: 配置解析往返 — "
+        "For any valid AISummaryConfig, format() then parse() produces matching field values",
+        []() {
+            ConfigManager cm;
+            AppConfig original;
+
+            // Generate random valid AISummaryConfig values
+            // FrameExporter params
+            const auto fps_int = *rc::gen::inRange<int>(1, 31);
+            original.ai_summary.export_fps = static_cast<double>(fps_int);
+
+            original.ai_summary.shm_name = "/" + *rc::gen::nonEmpty(
+                rc::gen::container<std::string>(rc::gen::inRange<char>('a', 'z' + 1)));
+
+            original.ai_summary.shm_size_mb = *rc::gen::inRange<uint32_t>(1, 1001);
+
+            original.ai_summary.socket_path = "/tmp/" + *rc::gen::nonEmpty(
+                rc::gen::container<std::string>(rc::gen::inRange<char>('a', 'z' + 1))) + ".sock";
+
+            // Activity Detector params
+            // Generate detect_classes from a fixed set of valid classes
+            const auto num_classes = *rc::gen::inRange<int>(1, 5);
+            std::vector<std::string> all_classes = {"person", "cat", "dog", "bird"};
+            std::string classes_str;
+            for (int i = 0; i < num_classes && i < static_cast<int>(all_classes.size()); i++) {
+                if (i > 0) classes_str += ",";
+                classes_str += all_classes[i];
+            }
+            original.ai_summary.detect_classes = classes_str;
+
+            // confidence_threshold: use integer tenths to avoid floating-point precision issues
+            const auto conf_int = *rc::gen::inRange<int>(1, 10);
+            original.ai_summary.confidence_threshold = conf_int * 0.1;
+
+            original.ai_summary.session_timeout_sec = *rc::gen::inRange<uint32_t>(10, 601);
+
+            original.ai_summary.capture_dir = "/var/lib/" + *rc::gen::nonEmpty(
+                rc::gen::container<std::string>(rc::gen::inRange<char>('a', 'z' + 1))) + "/";
+
+            original.ai_summary.capture_max_files = *rc::gen::inRange<uint32_t>(1, 1001);
+            original.ai_summary.capture_max_size_mb = *rc::gen::inRange<uint32_t>(1, 1001);
+            original.ai_summary.disk_min_free_mb = *rc::gen::inRange<uint32_t>(1, 1001);
+
+            // S3 Uploader params
+            original.ai_summary.s3_bucket = *rc::gen::nonEmpty(
+                rc::gen::container<std::string>(rc::gen::inRange<char>('a', 'z' + 1)));
+
+            original.ai_summary.s3_prefix = *rc::gen::nonEmpty(
+                rc::gen::container<std::string>(rc::gen::inRange<char>('a', 'z' + 1)));
+
+            original.ai_summary.upload_retry_count = *rc::gen::inRange<uint32_t>(1, 21);
+            original.ai_summary.upload_retry_interval_sec = *rc::gen::inRange<uint32_t>(1, 61);
+
+            // DynamoDB params
+            original.ai_summary.dynamodb_table = *rc::gen::nonEmpty(
+                rc::gen::container<std::string>(rc::gen::inRange<char>('a', 'z' + 1)));
+
+            original.ai_summary.event_ttl_days = *rc::gen::inRange<uint32_t>(1, 366);
+
+            // Round-trip: format → parse
+            std::string formatted = cm.format(original);
+            auto result = cm.parse(formatted);
+            RC_ASSERT(result.is_ok());
+
+            const auto& rt = result.value().ai_summary;
+
+            // Verify all 17 ai_summary fields match
+            RC_ASSERT(std::abs(rt.export_fps - original.ai_summary.export_fps) < 0.01);
+            RC_ASSERT(rt.shm_name == original.ai_summary.shm_name);
+            RC_ASSERT(rt.shm_size_mb == original.ai_summary.shm_size_mb);
+            RC_ASSERT(rt.socket_path == original.ai_summary.socket_path);
+            RC_ASSERT(rt.detect_classes == original.ai_summary.detect_classes);
+            RC_ASSERT(std::abs(rt.confidence_threshold - original.ai_summary.confidence_threshold) < 0.01);
+            RC_ASSERT(rt.session_timeout_sec == original.ai_summary.session_timeout_sec);
+            RC_ASSERT(rt.capture_dir == original.ai_summary.capture_dir);
+            RC_ASSERT(rt.capture_max_files == original.ai_summary.capture_max_files);
+            RC_ASSERT(rt.capture_max_size_mb == original.ai_summary.capture_max_size_mb);
+            RC_ASSERT(rt.disk_min_free_mb == original.ai_summary.disk_min_free_mb);
+            RC_ASSERT(rt.s3_bucket == original.ai_summary.s3_bucket);
+            RC_ASSERT(rt.s3_prefix == original.ai_summary.s3_prefix);
+            RC_ASSERT(rt.upload_retry_count == original.ai_summary.upload_retry_count);
+            RC_ASSERT(rt.upload_retry_interval_sec == original.ai_summary.upload_retry_interval_sec);
+            RC_ASSERT(rt.dynamodb_table == original.ai_summary.dynamodb_table);
+            RC_ASSERT(rt.event_ttl_days == original.ai_summary.event_ttl_days);
+        });
+}

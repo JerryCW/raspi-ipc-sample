@@ -17,6 +17,7 @@
 #endif
 
 #include "ai/ai_pipeline.h"
+#include "ai/frame_exporter.h"
 #include "auth/iot_authenticator.h"
 #include "buffer/frame_buffer_pool.h"
 #include "camera/camera_source.h"
@@ -351,6 +352,27 @@ int main(int argc, char* argv[]) {
         if (res.is_err()) {
             log_mgr->log(LogLevel::WARNING, "main",
                 "AI_Pipeline start failed: " + res.error().message);
+        }
+    }
+
+    // ── 13b. Register FrameExporter to AI_Pipeline ─────────
+    {
+        FrameExporterConfig fe_config;
+        fe_config.shm_name = config.ai_summary.shm_name;
+        fe_config.shm_size = static_cast<size_t>(config.ai_summary.shm_size_mb) * 1024 * 1024;
+        fe_config.socket_path = config.ai_summary.socket_path;
+        fe_config.target_fps = config.ai_summary.export_fps;
+
+        auto frame_exporter = std::make_shared<FrameExporter>(fe_config);
+        auto res = ai_pipeline->register_model(frame_exporter);
+        if (res.is_err()) {
+            log_mgr->log(LogLevel::WARNING, "main",
+                "FrameExporter registration failed: " + res.error().message);
+        } else {
+            log_mgr->log(LogLevel::INFO, "main",
+                "FrameExporter registered (fps=" +
+                std::to_string(fe_config.target_fps) + ", shm=" +
+                fe_config.shm_name + ")");
         }
     }
 

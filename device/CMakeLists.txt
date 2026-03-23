@@ -387,6 +387,14 @@ target_include_directories(resource_guard PUBLIC ${CMAKE_SOURCE_DIR}/include)
 add_library(shutdown_handler STATIC src/core/shutdown_handler.cpp)
 target_include_directories(shutdown_handler PUBLIC ${CMAKE_SOURCE_DIR}/include)
 
+# Frame Exporter library (POSIX shm + Unix Socket IPC for Python AI process)
+add_library(frame_exporter STATIC src/ai/frame_exporter.cpp)
+target_include_directories(frame_exporter PUBLIC ${CMAKE_SOURCE_DIR}/include)
+target_link_libraries(frame_exporter PUBLIC ai_pipeline)
+if(PLATFORM_LINUX)
+    target_link_libraries(frame_exporter PRIVATE rt)  # librt for shm_open/shm_unlink
+endif()
+
 # AI Pipeline library
 add_library(ai_pipeline STATIC src/ai/ai_pipeline.cpp)
 target_include_directories(ai_pipeline PUBLIC ${CMAKE_SOURCE_DIR}/include)
@@ -411,6 +419,7 @@ target_link_libraries(smart-camera PRIVATE
     watchdog
     frame_buffer_pool
     ai_pipeline
+    frame_exporter
     pipeline_orchestrator
     resource_guard
     shutdown_handler

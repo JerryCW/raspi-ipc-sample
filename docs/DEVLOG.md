@@ -1238,3 +1238,315 @@ _暂无。_
 
 ---
 
+
+### [2026-03-23] — 任务: AI Video Summary 1.1 扩展 default.ini 新增 [ai_summary] 配置节
+
+**概要：** 在 `device/config/default.ini` 末尾追加 `[ai_summary]` 配置节，包含 17 个参数及默认值，覆盖 FrameExporter、Activity Detector、S3 Uploader 和 DynamoDB 四个子模块的配置。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 配置参数与设计文档完全一致，后续 ConfigManager 解析逻辑可直接对照实现。
+
+**涉及的文件/组件：** device/config/default.ini
+
+---
+
+### [2026-03-23] — 任务: AI Video Summary 1.2 扩展 AppConfig 结构体和 ConfigManager 解析逻辑
+
+**概要：** 在 `config_manager.h` 中新增 `AISummaryConfig` 结构体（17 个字段含默认值），在 `AppConfig` 中添加 `ai_summary` 字段，在 `apply_section()` 中实现 `[ai_summary]` 节解析（含 `get_double` lambda 处理浮点参数），在 `format()` 中添加输出支持。新增 7 个单元测试，全部 66 个测试通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** `get_double` lambda 复用了现有 `get_uint` 的模式，保持代码风格一致。
+
+**涉及的文件/组件：** device/include/config/config_manager.h, device/src/config/config_manager.cpp, device/tests/test_config_manager.cpp
+
+---
+
+### [2026-03-23] — 任务: AI Video Summary 1.3 编写配置解析往返属性测试（C++ RapidCheck）
+
+**概要：** 添加 Property 21（配置解析往返）RapidCheck 属性测试到 `test_config_manager.cpp`。生成随机 AISummaryConfig 值，通过 format() → parse() 往返验证所有 17 个字段一致。链接 rapidcheck 和 rapidcheck_gtest 到 test_config_manager 目标。100 次迭代全部通过。
+
+**遇到的问题：**
+- **[类型: 设计决策]：** 浮点数往返精度问题——export_fps 和 confidence_threshold 使用整数生成再转换为浮点，避免 format/parse 精度丢失
+  - **解决方案/状态：** 使用整数 fps_int 和 conf_int * 0.1 生成，比较时允许 0.01 误差
+
+**经验教训：** 浮点数属性测试需要控制生成精度，避免 `std::to_string` 的精度截断导致往返不一致。
+
+**涉及的文件/组件：** device/tests/test_config_manager.cpp, device/tests/CMakeLists.txt
+
+---
+
+### [2026-03-23] — 任务: AI Video Summary 2.1 创建 frame_exporter.h 头文件
+
+**概要：** 创建 `device/include/ai/frame_exporter.h`，定义 FrameExporterConfig、SharedMemoryHeader（64 字节）、FrameNotification 结构体和 FrameExporter 类（继承 IAIModel），包含共享内存、Unix Socket、帧率控制方法声明和统计计数器。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** SharedMemoryHeader 使用 51 字节 padding 凑齐 64 字节对齐，后续实现需确保 sizeof(SharedMemoryHeader) == 64。
+
+**涉及的文件/组件：** device/include/ai/frame_exporter.h
+
+---
+
+### [2026-03-23] — 任务: AI Video Summary 2.2 实现 frame_exporter.cpp
+
+**概要：** 实现 FrameExporter 完整功能：POSIX 共享内存（shm_open + ftruncate + mmap）、Unix Domain Socket 服务端（非阻塞 accept）、analyze() 帧率采样 + ping-pong 写入 + JSON 通知、RAII 清理。添加 CMake 库目标。
+
+**遇到的问题：**
+- **[类型: 设计决策]：** macOS 无 MSG_NOSIGNAL，需要兼容处理
+  - **解决方案/状态：** 使用 `#ifndef MSG_NOSIGNAL` 定义为 0，macOS 上通过 SO_NOSIGPIPE 替代
+
+**经验教训：** POSIX IPC 跨平台差异需要条件编译或宏兼容。Linux 需要链接 librt（shm_open），macOS 不需要。
+
+**涉及的文件/组件：** device/src/ai/frame_exporter.cpp, device/CMakeLists.txt
+
+---
+
+### [2026-03-23] — 任务: AI Video Summary 2.3 + 2.4 CMake 更新与 main.cpp 集成
+
+**概要：** 验证 frame_exporter CMake 库目标已存在，添加 test_frame_exporter 测试目标（链接 rapidcheck），在 main.cpp 中注册 FrameExporter 到 AIPipeline（从 ai_summary 配置构造 FrameExporterConfig）。
+
+**遇到的问题：**
+- **[类型: 依赖]：** smart-camera 可执行文件需要链接 frame_exporter 库
+  - **解决方案/状态：** 在 CMakeLists.txt 的 target_link_libraries 中添加 frame_exporter
+
+**经验教训：** 新增库目标后需同步更新可执行文件的链接依赖。
+
+**涉及的文件/组件：** device/CMakeLists.txt, device/tests/CMakeLists.txt, device/tests/test_frame_exporter.cpp, device/src/main.cpp
+
+---
+
+### [2026-03-23] — 任务: AI Video Summary 2.5-2.7 FrameExporter 单元测试与属性测试
+
+**概要：** 完成 test_frame_exporter.cpp，包含 9 个单元测试（共享内存创建/RAII 清理、Socket 绑定/连接、无客户端不阻塞、断开重连、计数器递增）和 2 个 RapidCheck 属性测试（Property 2 帧率采样限制、Property 4 Ping-pong 缓冲区交替），全部通过。
+
+**遇到的问题：**
+- **[类型: 设计决策]：** 测试隔离——每个测试使用 unique_shm_name() 和 unique_socket_path() 避免并行测试冲突
+  - **解决方案/状态：** 使用 PID + 递增计数器生成唯一名称
+- **[类型: 性能]：** 属性测试中 should_sample_frame() 的时间门控需要 sleep 等待
+  - **解决方案/状态：** 使用 analyze_until_exported() 辅助函数循环重试，避免固定 sleep
+
+**经验教训：** POSIX IPC 测试需要严格的资源隔离（唯一名称）和清理（RAII），否则并行测试会互相干扰。
+
+**涉及的文件/组件：** device/tests/test_frame_exporter.cpp
+
+---
+
+### [2026-03-23] — 任务: AI Video Summary 3. 检查点 — C++ 侧编译通过且测试通过
+
+**概要：** 执行 C++ 检查点验证。CMake 配置、编译（31 个目标）和测试（507/507 通过）全部成功。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** 无文件变更（仅验证）
+
+---
+
+### [2026-03-23] — 任务: AI Video Summary 4.1 创建 device/ai/ Python 包结构
+
+**概要：** 创建 Python 包结构：`__init__.py`、`config.py`（DetectorConfig dataclass + from_ini + 环境变量覆盖）、`requirements.txt`、`tests/__init__.py`。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** detect_classes 在 INI 中是逗号分隔字符串，在 Python 中是 List[str]，_coerce() 函数处理转换。
+
+**涉及的文件/组件：** device/ai/__init__.py, device/ai/config.py, device/ai/requirements.txt, device/ai/tests/__init__.py
+
+---
+
+### [2026-03-23] — 任务: AI Video Summary 4.2-4.3 IPC 客户端与控制消息属性测试
+
+**概要：** 实现 `ipc_client.py`（FrameNotification dataclass、serialize/parse、IPCClient 类含指数退避连接、共享内存映射、帧读取）和 Property 1 属性测试（Hypothesis，200 次迭代，验证 JSON 序列化往返）。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** `socket.makefile("r")` 提供 readline() 方便逐行读取 JSON 消息，避免手动缓冲区管理。
+
+**涉及的文件/组件：** device/ai/ipc_client.py, device/ai/tests/test_ipc_client.py
+
+---
+
+### [2026-03-23] — 任务: AI Video Summary 4.4-4.5 活动会话状态机与属性测试
+
+**概要：** 实现 `session.py`（ActivitySession dataclass + SessionManager 类，含依赖注入 I/O）和 6 个 Hypothesis 属性测试（Properties 5-10），全部通过。
+
+**遇到的问题：**
+- **[类型: bug]：** Property 10 的 `test_ending_one_session_does_not_affect_others` 在 extra_ms > timeout_ms 时失败，因为 cat 会话也超时
+  - **解决方案/状态：** 修改测试在 check_time 时更新 cat 会话，确保其始终在超时窗口内
+
+**经验教训：** 属性测试中的时间相关断言需要仔细考虑随机生成值的边界情况。依赖注入 I/O 回调是测试文件操作的有效模式。
+
+**涉及的文件/组件：** device/ai/session.py, device/ai/tests/test_session.py
+
+---
+
+### [2026-03-23] — 任务: AI Video Summary 4.6 Activity Detector 主进程
+
+**概要：** 实现 `activity_detector.py` 主进程，包含 IPC 连接、YOLO 推理循环、COCO 类别过滤、会话状态机集成、磁盘保护、异常捕获和 `__main__` 入口点。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 磁盘保护逻辑在超限时仍允许更新已有会话，仅阻止创建新会话，避免丢失正在进行的活动跟踪。
+
+**涉及的文件/组件：** device/ai/activity_detector.py
+
+---
+
+### [2026-03-23] — 任务: AI Video Summary 5. 检查点 — Python Activity Detector 测试通过
+
+**概要：** 执行 Python 检查点验证。12 个测试全部通过（3 个 IPC 客户端 + 9 个会话状态机），耗时 2.93 秒。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** 无文件变更（仅验证）
+
+---
+
+### [2026-03-23] — 任务: 6.1 实现 S3 Uploader 主模块 `device/ai/s3_uploader.py`
+
+**概要：** 实现完整的 S3Uploader 类，包含文件监控、S3 上传、DynamoDB 写入、指数退避重试和错误处理。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。依赖注入（s3_client、dynamodb_resource）便于后续测试。
+
+**经验教训：** 原子上传逻辑（三个文件全部成功才删除本地文件）通过顺序上传 + 任一失败即 move_to_errors 实现。DynamoDB float 值需转为 Decimal 避免精度问题。
+
+**涉及的文件/组件：** device/ai/s3_uploader.py, device/ai/requirements.txt
+
+---
+
+### [2026-03-23] — 任务: 6.2 编写 S3 Uploader 属性测试（Python Hypothesis）
+
+**概要：** 创建 `device/ai/tests/test_s3_uploader.py`，包含 11 个属性测试覆盖 Property 11/12/13/14/20。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 使用 `tempfile.mkdtemp()` 替代 pytest 的 `tmp_path` fixture，与 Hypothesis 兼容性更好。`os.utime()` 可控制文件时间戳用于排序测试。
+
+**涉及的文件/组件：** device/ai/tests/test_s3_uploader.py
+
+---
+
+### [2026-03-23] — 任务: 6.3 编写配置环境变量覆盖属性测试
+
+**概要：** 创建 `device/ai/tests/test_config.py`，Property 22 验证 AI_SUMMARY_ 前缀环境变量覆盖 INI 配置值。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** Hypothesis composite strategy 适合生成"同一字段的两个不同值"这类约束数据。
+
+**涉及的文件/组件：** device/ai/tests/test_config.py
+
+---
+
+### [2026-03-23] — 任务: 7. 检查点 — 确保 S3 Uploader 测试通过
+
+**概要：** 24 个 Python 测试全部通过（test_config 1 + test_ipc_client 3 + test_s3_uploader 11 + test_session 9），耗时 6.35s。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** 验证性任务，未修改文件。
+
+---
+
+### [2026-03-23] — 任务: 8.1-8.4 后端 Events API 实现
+
+**概要：** 安装后端依赖（DynamoDB/S3 SDK、jwks-rsa、jsonwebtoken），创建 `viewer/server/events.js` 模块（JWT 中间件 + 两个 API 端点），更新 `viewer/server/index.js` 注册路由。
+
+**遇到的问题：**
+- **[设计决策]：** 将 events 逻辑提取到独立模块 `events.js`，导出 verifyJwt/getEvents/getThumbnail/isValidDateFormat/isWithin90Days 便于测试
+  - **解决方案/状态：** 模块化设计，index.js 仅负责路由注册
+- **[设计决策]：** thumbnail 查询使用 device_id 分区键 + session_id FilterExpression，非 GSI
+  - **解决方案/状态：** MVP 阶段可接受，生产环境建议添加 session_id GSI
+
+**经验教训：** Express 5 路由通配符语法为 `{*splat}`（非 Express 4 的 `*`）。事件路由必须在 catch-all 之前注册。
+
+**涉及的文件/组件：** viewer/server/events.js, viewer/server/index.js, viewer/package.json, viewer/.env, viewer/.env.example
+
+---
+
+### [2026-03-23] — 任务: 8.5 + 9. 后端 API 属性测试与检查点
+
+**概要：** 创建 `viewer/server/__tests__/events.test.ts`（9 个属性测试覆盖 Property 17/18/19），检查点验证 12 个后端测试全部通过。
+
+**遇到的问题：**
+- **[边界情况]：** 全量测试中 useDebugLog 和 useHLS 有 2 个预存失败（NaN 时间戳、24 小时范围计算），与本 spec 无关
+  - **解决方案/状态：** 仅验证 events 相关测试通过，预存问题留待后续修复
+
+**经验教训：** 属性测试中 supertest 请求是异步的，需使用 `fc.asyncProperty` + `fc.assert` 的 async 模式。
+
+**涉及的文件/组件：** viewer/server/__tests__/events.test.ts
+
+---
+
+### [2026-03-23] — 任务: 10.1-10.5 Viewer 活动事件 Tab 实现
+
+**概要：** 完成前端全部 5 个子任务：ActivityEvent 类型定义、events 服务层、useEvents Hook、EventsPanel 组件（含 DatePicker/EventCard/状态处理）、TabView 扩展（新增"活动事件" Tab + 跳转回放）。
+
+**遇到的问题：**
+- **[设计决策]：** HLS 跳转回放通过 CustomEvent (`hls-jump-to-range`) 实现跨组件通信
+  - **解决方案/状态：** TabView 的 handleJumpToPlayback 先切换到 HLS tab，100ms 延迟后 dispatch 事件。HLSPanel 需监听此事件（后续集成时验证）。
+
+**经验教训：** 检测类别图标使用 emoji（🧑🐱🐕🐦）简化实现，无需额外图标库。
+
+**涉及的文件/组件：** viewer/src/types/index.ts, viewer/src/services/events.ts, viewer/src/hooks/useEvents.ts, viewer/src/components/EventsPanel.tsx, viewer/src/components/TabView.tsx, viewer/src/pages/ViewerPage.tsx
+
+---
+
+### [2026-03-23] — 任务: 10.6 前端属性测试
+
+**概要：** 创建 `viewer/src/__tests__/EventsPanel.test.ts`，17 个测试（Property 15/16 + 单元测试）全部通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 使用纯函数模型（renderEventCardModel）测试渲染契约，避免 React 渲染环境的复杂性。
+
+**涉及的文件/组件：** viewer/src/__tests__/EventsPanel.test.ts
+
+---
+
+### [2026-03-23] — 任务: 11.1-11.2 集成脚本与 systemd 服务
+
+**概要：** 创建 `run_detector.sh`/`run_uploader.sh` 启动脚本和 `activity-detector.service`/`s3-uploader.service` systemd 服务文件。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 无特殊事项。
+
+**涉及的文件/组件：** device/ai/run_detector.sh, device/ai/run_uploader.sh, device/deploy/activity-detector.service, device/deploy/s3-uploader.service
+
+---
+
+### [2026-03-23] — 任务: 12. 最终检查点 — 确保所有测试通过
+
+**概要：** 最终检查点验证。Python 24 个测试全部通过，Viewer 37 个测试全部通过。
+
+**遇到的问题：**
+- **[边界情况]：** Property 22（环境变量覆盖）因 `%` 字符触发 configparser 插值语法报错
+  - **解决方案/状态：** 在 `_ini_safe_str` 策略中将 `%` 加入 blacklist_characters，已修复
+
+**经验教训：** Python configparser 默认启用 `%` 插值，生成随机 INI 值时必须排除 `%` 字符。
+
+**涉及的文件/组件：** device/ai/tests/test_config.py（修复 `%` 字符问题）
+
+---

@@ -203,6 +203,31 @@ void ConfigManager::apply_section(AppConfig& config, const std::string& section,
         config.frame_pool_size = get_uint("pool_size", config.frame_pool_size);
     } else if (section == "ai") {
         config.ai_model_timeout_sec = get_uint("model_timeout_sec", config.ai_model_timeout_sec);
+    } else if (section == "ai_summary") {
+        auto get_double = [&](const std::string& key, double def) -> double {
+            auto v = get(key);
+            if (v.empty()) return def;
+            try { return std::stod(v); }
+            catch (...) { return def; }
+        };
+
+        config.ai_summary.export_fps = get_double("export_fps", config.ai_summary.export_fps);
+        if (!get("shm_name").empty()) config.ai_summary.shm_name = get("shm_name");
+        config.ai_summary.shm_size_mb = get_uint("shm_size_mb", config.ai_summary.shm_size_mb);
+        if (!get("socket_path").empty()) config.ai_summary.socket_path = get("socket_path");
+        if (!get("detect_classes").empty()) config.ai_summary.detect_classes = get("detect_classes");
+        config.ai_summary.confidence_threshold = get_double("confidence_threshold", config.ai_summary.confidence_threshold);
+        config.ai_summary.session_timeout_sec = get_uint("session_timeout_sec", config.ai_summary.session_timeout_sec);
+        if (!get("capture_dir").empty()) config.ai_summary.capture_dir = get("capture_dir");
+        config.ai_summary.capture_max_files = get_uint("capture_max_files", config.ai_summary.capture_max_files);
+        config.ai_summary.capture_max_size_mb = get_uint("capture_max_size_mb", config.ai_summary.capture_max_size_mb);
+        config.ai_summary.disk_min_free_mb = get_uint("disk_min_free_mb", config.ai_summary.disk_min_free_mb);
+        if (!get("s3_bucket").empty()) config.ai_summary.s3_bucket = get("s3_bucket");
+        if (!get("s3_prefix").empty()) config.ai_summary.s3_prefix = get("s3_prefix");
+        config.ai_summary.upload_retry_count = get_uint("upload_retry_count", config.ai_summary.upload_retry_count);
+        config.ai_summary.upload_retry_interval_sec = get_uint("upload_retry_interval_sec", config.ai_summary.upload_retry_interval_sec);
+        if (!get("dynamodb_table").empty()) config.ai_summary.dynamodb_table = get("dynamodb_table");
+        config.ai_summary.event_ttl_days = get_uint("event_ttl_days", config.ai_summary.event_ttl_days);
     }
 }
 
@@ -485,6 +510,25 @@ std::string ConfigManager::format(const AppConfig& config) const {
 
     out << "\n[ai]\n";
     out << "model_timeout_sec = " << config.ai_model_timeout_sec << "\n";
+
+    out << "\n[ai_summary]\n";
+    out << "export_fps = " << config.ai_summary.export_fps << "\n";
+    out << "shm_name = " << config.ai_summary.shm_name << "\n";
+    out << "shm_size_mb = " << config.ai_summary.shm_size_mb << "\n";
+    out << "socket_path = " << config.ai_summary.socket_path << "\n";
+    out << "detect_classes = " << config.ai_summary.detect_classes << "\n";
+    out << "confidence_threshold = " << config.ai_summary.confidence_threshold << "\n";
+    out << "session_timeout_sec = " << config.ai_summary.session_timeout_sec << "\n";
+    out << "capture_dir = " << config.ai_summary.capture_dir << "\n";
+    out << "capture_max_files = " << config.ai_summary.capture_max_files << "\n";
+    out << "capture_max_size_mb = " << config.ai_summary.capture_max_size_mb << "\n";
+    out << "disk_min_free_mb = " << config.ai_summary.disk_min_free_mb << "\n";
+    out << "s3_bucket = " << config.ai_summary.s3_bucket << "\n";
+    out << "s3_prefix = " << config.ai_summary.s3_prefix << "\n";
+    out << "upload_retry_count = " << config.ai_summary.upload_retry_count << "\n";
+    out << "upload_retry_interval_sec = " << config.ai_summary.upload_retry_interval_sec << "\n";
+    out << "dynamodb_table = " << config.ai_summary.dynamodb_table << "\n";
+    out << "event_ttl_days = " << config.ai_summary.event_ttl_days << "\n";
 
     return out.str();
 }

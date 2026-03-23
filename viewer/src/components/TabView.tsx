@@ -53,24 +53,6 @@ export function TabView({
     [activeTab],
   );
 
-  /** Jump to HLS playback for a given time range (called from EventsPanel). */
-  const handleJumpToPlayback = useCallback(
-    (startMs: number, endMs: number) => {
-      setActiveTab('hls');
-      // HLSPanel's start() expects Date objects — trigger via Timeline's onTimeSelect
-      // We use a small delay to ensure the HLS panel is visible before starting playback
-      setTimeout(() => {
-        const startDate = new Date(startMs);
-        const endDate = new Date(endMs);
-        // Dispatch a custom event that HLSPanel can listen to
-        window.dispatchEvent(
-          new CustomEvent('hls-jump-to-range', { detail: { start: startDate, end: endDate } }),
-        );
-      }, 100);
-    },
-    [],
-  );
-
   return (
     <div className="flex flex-col gap-4">
       {/* Tab bar */}
@@ -109,7 +91,9 @@ export function TabView({
       <div className={activeTab === 'events' ? '' : 'hidden'}>
         <EventsPanel
           idToken={idToken}
-          onJumpToPlayback={handleJumpToPlayback}
+          streamName={streamName}
+          credentials={credentials}
+          region={region}
         />
       </div>
     </div>

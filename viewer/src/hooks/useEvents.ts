@@ -30,9 +30,9 @@ export function useEvents(date: Date, idToken: string | null): UseEventsReturn {
 
   const dateStr = toDateStringUTC8(date);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (showLoading = true) => {
     if (!idToken) return;
-    setIsLoading(true);
+    if (showLoading) setIsLoading(true);
     setError(null);
     try {
       const data = await fetchEvents(dateStr, idToken);
@@ -41,12 +41,19 @@ export function useEvents(date: Date, idToken: string | null): UseEventsReturn {
       setError(err instanceof Error ? err.message : 'Failed to load events');
       setEvents([]);
     } finally {
-      setIsLoading(false);
+      if (showLoading) setIsLoading(false);
     }
   }, [dateStr, idToken]);
 
   useEffect(() => {
-    void load();
+    void load(true);
+
+    // Auto-refresh every 30 seconds (silent, no loading spinner)
+    const interval = setInterval(() => {
+      void load(false);
+    }, 30_000);
+
+    return () => clearInterval(interval);
   }, [load]);
 
   const retry = useCallback(() => {

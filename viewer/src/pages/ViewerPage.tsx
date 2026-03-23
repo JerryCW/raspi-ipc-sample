@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/useAuth';
 import { env } from '../config/env';
 import { Layout } from '../components/Layout';
@@ -14,9 +14,9 @@ import type { Fragment } from '../types';
 export function ViewerPage() {
   const { credentials, tokens, logout } = useAuth();
 
-  const [region, setRegion] = useState(env.defaultRegion);
-  const [channelName, setChannelName] = useState(env.defaultChannelName);
-  const [streamName, setStreamName] = useState(env.defaultStreamName);
+  const region = env.defaultRegion;
+  const channelName = env.defaultChannelName;
+  const streamName = env.defaultStreamName;
   const [preloadedFragments, setPreloadedFragments] = useState<Fragment[]>([]);
 
   // Preload today's fragments once credentials are available

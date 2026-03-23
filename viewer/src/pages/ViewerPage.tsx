@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../auth/useAuth';
 import { env } from '../config/env';
 import { Layout } from '../components/Layout';
-import { ConfigPanel } from '../components/ConfigPanel';
 import { TabView } from '../components/TabView';
 import { listFragments } from '../services/kvs';
 import { getDayStartUTC8 } from '../components/Timeline';
@@ -35,24 +34,14 @@ export function ViewerPage() {
 
   return (
     <Layout onLogout={logout}>
-      <div className="flex flex-col gap-6">
-        <ConfigPanel
-          region={region}
-          channelName={channelName}
-          streamName={streamName}
-          onRegionChange={setRegion}
-          onChannelNameChange={setChannelName}
-          onStreamNameChange={setStreamName}
-        />
-        <TabView
-          channelName={channelName}
-          streamName={streamName}
-          credentials={credentials}
-          region={region}
-          preloadedFragments={preloadedFragments}
-          idToken={tokens?.idToken ?? null}
-        />
-      </div>
+      <TabView
+        channelName={channelName}
+        streamName={streamName}
+        credentials={credentials}
+        region={region}
+        preloadedFragments={preloadedFragments}
+        idToken={tokens?.idToken ?? null}
+      />
     </Layout>
   );
 }

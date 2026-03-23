@@ -167,6 +167,27 @@ export async function getAwsCredentials(
 }
 
 /**
+ * Map Cognito error messages to user-friendly Chinese text.
+ */
+function friendlyAuthError(raw: string, status: number): string {
+  const lower = raw.toLowerCase();
+  if (lower.includes('token expired') || lower.includes('expired'))
+    return '登录已过期，请重新登录';
+  if (lower.includes('incorrect username or password') || lower.includes('not authorized'))
+    return '用户名或密码错误';
+  if (lower.includes('user does not exist'))
+    return '用户不存在';
+  if (lower.includes('password attempts exceeded'))
+    return '登录尝试次数过多，请稍后再试';
+  if (lower.includes('user is not confirmed'))
+    return '账户尚未验证，请检查邮箱';
+  if (lower.includes('user is disabled'))
+    return '账户已被禁用，请联系管理员';
+  if (status === 400) return '登录失败，请检查用户名和密码';
+  return `登录失败 (${status})`;
+}
+
+/**
  * Sign in directly with username/password using Cognito USER_PASSWORD_AUTH flow.
  * Returns tokens without redirecting to Hosted UI.
  */
@@ -195,7 +216,8 @@ export async function signInWithPassword(
 
   if (!response.ok) {
     const errorData = await response.json();
-    throw new Error(errorData.message || `Authentication failed: ${response.status}`);
+    const raw = errorData.message || '';
+    throw new Error(friendlyAuthError(raw, response.status));
   }
 
   const data = await response.json();

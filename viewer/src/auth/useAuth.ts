@@ -113,8 +113,18 @@ export function useAuth(): {
         setError(null);
         return creds;
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to obtain AWS credentials';
-        setError(message);
+        const raw = err instanceof Error ? err.message : '';
+        const isExpired = raw.toLowerCase().includes('expired') || raw.toLowerCase().includes('token');
+        if (isExpired) {
+          // Token expired — clear everything so user re-logs in
+          clearStorage();
+          tokensRef.current = null;
+          setTokens(null);
+          setCredentials(null);
+          setError('登录已过期，请重新登录');
+        } else {
+          setError(raw || '获取凭证失败');
+        }
         return null;
       }
     },
@@ -136,8 +146,9 @@ export function useAuth(): {
           scheduleRefresh(creds, newTokens);
         }
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Token refresh failed';
-        setError(message);
+        const raw = err instanceof Error ? err.message : 'Token refresh failed';
+        const isExpired = raw.toLowerCase().includes('expired') || raw.toLowerCase().includes('token');
+        setError(isExpired ? '登录已过期，请重新登录' : raw);
         // Refresh failed — clear state so user can re-login
         clearStorage();
         tokensRef.current = null;

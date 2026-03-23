@@ -473,6 +473,100 @@ echo "Viewer URL: http://${PUBLIC_IP}:3000"
 
 ---
 
+## 5. AI 视频活动摘要资源
+
+活动事件功能需要 S3 存储桶（截图）、DynamoDB 表（事件记录）和 ECS 任务角色权限。
+
+### 5.1 创建 S3 存储桶（活动截图）
+
+```bash
+aws s3api create-bucket \
+  --bucket smart-camera-captures \
+  --region ap-southeast-1 \
+  --create-bucket-configuration LocationConstraint=ap-southeast-1
+```
+
+### 5.2 创建 DynamoDB 表（活动事件）
+
+```bash
+# 创建表：PK=device_id, SK=event_timestamp
+aws dynamodb create-table \
+  --table-name smart-camera-events \
+  --attribute-definitions \
+    AttributeName=device_id,AttributeType=S \
+    AttributeName=event_timestamp,AttributeType=S \
+  --key-schema \
+    AttributeName=device_id,KeyType=HASH \
+    AttributeName=event_timestamp,KeyType=RANGE \
+  --billing-mode PAY_PER_REQUEST \
+  --region ap-southeast-1
+
+# 等待表创建完成
+aws dynamodb wait table-exists --table-name smart-camera-events --region ap-southeast-1
+
+# 启用 TTL（90 天自动过期）
+aws dynamodb update-time-to-live \
+  --table-name smart-camera-events \
+  --time-to-live-specification Enabled=true,AttributeName=expiry_ttl \
+  --region ap-southeast-1
+```
+
+### 5.3 更新 ECS 任务角色权限
+
+给 `raspi-camera-task-role` 添加 DynamoDB 和 S3 访问权限：
+
+```bash
+aws iam put-role-policy \
+  --role-name raspi-camera-task-role \
+  --policy-name raspi-camera-events-policy \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": ["dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem"],
+        "Resource": "arn:aws:dynamodb:ap-southeast-1:823092283330:table/smart-camera-events"
+      },
+      {
+        "Effect": "Allow",
+        "Action": ["s3:GetObject", "s3:PutObject"],
+        "Resource": "arn:aws:s3:::smart-camera-captures/*"
+      }
+    ]
+  }'
+```
+
+### 5.4 更新 ECS 任务定义
+
+任务定义需要包含以下环境变量和 taskRoleArn：
+
+```bash
+# 环境变量（在 containerDefinitions.environment 中）：
+# COGNITO_USER_POOL_ID=ap-southeast-1_dN28pXdRp
+# COGNITO_REGION=ap-southeast-1
+# DYNAMODB_TABLE=smart-camera-events
+# S3_BUCKET=smart-camera-captures
+# DEVICE_ID=raspi-camera-01
+
+# taskRoleArn: arn:aws:iam::823092283330:role/raspi-camera-task-role
+```
+
+### 5.5 资源清理
+
+```bash
+# 删除 DynamoDB 表
+aws dynamodb delete-table --table-name smart-camera-events --region ap-southeast-1
+
+# 清空并删除 S3 桶
+aws s3 rm s3://smart-camera-captures --recursive
+aws s3api delete-bucket --bucket smart-camera-captures --region ap-southeast-1
+
+# 删除 IAM 内联策略
+aws iam delete-role-policy --role-name raspi-camera-task-role --policy-name raspi-camera-events-policy
+```
+
+---
+
 ## 资源清理
 
 ```bash

@@ -10,6 +10,7 @@ WorkingDirectory=/opt/smart-camera
 Restart=on-failure
 RestartSec=5
 Environment=AI_SUMMARY_CONFIG_PATH=/etc/smart-camera/config.ini
+Environment=AWS_DEFAULT_REGION=ap-southeast-1
 
 [Install]
 WantedBy=multi-user.target

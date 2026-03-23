@@ -302,7 +302,7 @@ TEST(FrameExporterUnit, ConfigDefaults) {
     FrameExporterConfig config;
     EXPECT_EQ(config.shm_name, "/smart_camera_frames");
     EXPECT_EQ(config.shm_size, 20u * 1024 * 1024);
-    EXPECT_EQ(config.socket_path, "/tmp/smart_camera_ai.sock");
+    EXPECT_EQ(config.socket_path, "/run/smart-camera/ai.sock");
     EXPECT_DOUBLE_EQ(config.target_fps, 2.0);
 }
 

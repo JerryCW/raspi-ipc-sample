@@ -24,7 +24,7 @@ class DetectorConfig:
     export_fps: float = 2.0
     shm_name: str = "/smart_camera_frames"
     shm_size_mb: int = 20
-    socket_path: str = "/tmp/smart_camera_ai.sock"
+    socket_path: str = "/run/smart-camera/ai.sock"
 
     # Activity Detector params
     detect_classes: List[str] = field(default_factory=lambda: ["person", "cat", "dog", "bird"])

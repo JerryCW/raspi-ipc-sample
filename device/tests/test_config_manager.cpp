@@ -993,7 +993,7 @@ TEST(AISummaryConfigDefaults, CorrectDefaults) {
     EXPECT_DOUBLE_EQ(ai.export_fps, 2.0);
     EXPECT_EQ(ai.shm_name, "/smart_camera_frames");
     EXPECT_EQ(ai.shm_size_mb, 20u);
-    EXPECT_EQ(ai.socket_path, "/tmp/smart_camera_ai.sock");
+    EXPECT_EQ(ai.socket_path, "/run/smart-camera/ai.sock");
     EXPECT_EQ(ai.detect_classes, "person,cat,dog,bird");
     EXPECT_DOUBLE_EQ(ai.confidence_threshold, 0.5);
     EXPECT_EQ(ai.session_timeout_sec, 60u);

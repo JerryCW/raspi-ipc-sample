@@ -17,7 +17,7 @@ namespace sc {
 struct FrameExporterConfig {
     std::string shm_name = "/smart_camera_frames";   // POSIX shm name
     size_t shm_size = 20 * 1024 * 1024;              // 20MB (ping-pong double buffer)
-    std::string socket_path = "/tmp/smart_camera_ai.sock";
+    std::string socket_path = "/run/smart-camera/ai.sock";
     double target_fps = 2.0;                          // sampling frequency
 };
 

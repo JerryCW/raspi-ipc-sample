@@ -17,7 +17,8 @@ Environment=LD_LIBRARY_PATH=/home/pi/Workspace/kvs-producer-sdk-cpp/build
 # Security hardening
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/var/log/smart-camera /var/cache/smart-camera
+ReadWritePaths=/var/log/smart-camera /var/cache/smart-camera /run/smart-camera
+RuntimeDirectory=smart-camera
 PrivateTmp=true
 NoNewPrivileges=true
 

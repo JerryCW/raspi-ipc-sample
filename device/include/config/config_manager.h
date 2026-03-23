@@ -76,7 +76,7 @@ struct AISummaryConfig {
     double export_fps = 2.0;
     std::string shm_name = "/smart_camera_frames";
     uint32_t shm_size_mb = 20;
-    std::string socket_path = "/tmp/smart_camera_ai.sock";
+    std::string socket_path = "/run/smart-camera/ai.sock";
 
     // Activity Detector
     std::string detect_classes = "person,cat,dog,bird";

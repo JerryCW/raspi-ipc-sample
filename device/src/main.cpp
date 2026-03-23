@@ -417,6 +417,10 @@ int main(int argc, char* argv[]) {
         return true;
     });
     shutdown_handler.add_step("AI_Pipeline", [&]() {
+        ai_feed_running.store(false);
+        if (ai_feed_thread && ai_feed_thread->joinable()) {
+            ai_feed_thread->join();
+        }
         ai_pipeline->stop();
         return true;
     });
@@ -562,6 +566,81 @@ int main(int argc, char* argv[]) {
 #else
     log_mgr->log(LogLevel::INFO, "main",
         "GStreamer not available — frame pull thread disabled");
+#endif
+
+    // ── AI frame feed thread (GStreamer ai_sink → FrameBufferPool) ──
+    std::atomic<bool> ai_feed_running{false};
+    std::unique_ptr<std::thread> ai_feed_thread;
+#ifdef HAS_GSTREAMER
+    {
+        GstElement* pipeline_element = gst_pipeline->get_pipeline_element();
+        GstElement* ai_appsink = nullptr;
+        if (pipeline_element) {
+            ai_appsink = gst_bin_get_by_name(GST_BIN(pipeline_element), "ai_sink");
+        }
+
+        if (ai_appsink && GST_IS_APP_SINK(ai_appsink)) {
+            ai_feed_running.store(true);
+            ai_feed_thread = std::make_unique<std::thread>(
+                [&frame_pool, &log_mgr, &ai_feed_running, ai_appsink]() {
+                    log_mgr->log(LogLevel::INFO, "main", "AI frame feed thread started");
+                    uint64_t seq = 0;
+
+                    while (ai_feed_running.load() &&
+                           !ShutdownHandler::shutdown_requested()) {
+                        GstSample* sample = gst_app_sink_try_pull_sample(
+                            GST_APP_SINK(ai_appsink), 500 * GST_MSECOND);
+                        if (!sample) {
+                            continue;
+                        }
+
+                        GstBuffer* buffer = gst_sample_get_buffer(sample);
+                        GstCaps* caps = gst_sample_get_caps(sample);
+                        if (buffer && caps) {
+                            GstMapInfo map;
+                            if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+                                // Get frame dimensions from caps
+                                GstStructure* s = gst_caps_get_structure(caps, 0);
+                                int width = 0, height = 0;
+                                gst_structure_get_int(s, "width", &width);
+                                gst_structure_get_int(s, "height", &height);
+
+                                // Acquire a buffer from the pool and submit
+                                auto acq_res = frame_pool->acquire();
+                                if (acq_res.is_ok()) {
+                                    auto fb = std::move(acq_res).value();
+                                    FrameInfo info;
+                                    info.width = static_cast<uint32_t>(width);
+                                    info.height = static_cast<uint32_t>(height);
+                                    info.sequence_number = ++seq;
+                                    if (GST_BUFFER_PTS_IS_VALID(buffer)) {
+                                        info.timestamp_us = GST_BUFFER_PTS(buffer) / 1000;
+                                    }
+                                    fb->fill(map.data, map.size, info);
+                                    frame_pool->submit(std::move(fb));
+                                }
+
+                                gst_buffer_unmap(buffer, &map);
+                            }
+                        }
+
+                        gst_sample_unref(sample);
+                    }
+
+                    log_mgr->log(LogLevel::INFO, "main", "AI frame feed thread stopped");
+                });
+
+            log_mgr->log(LogLevel::INFO, "main",
+                "AI frame feed thread launched for ai_sink appsink");
+        } else {
+            log_mgr->log(LogLevel::WARNING, "main",
+                "ai_sink appsink not found — AI frame feed thread not started");
+        }
+
+        if (ai_appsink) {
+            gst_object_unref(ai_appsink);
+        }
+    }
 #endif
 
     log_mgr->log(LogLevel::INFO, "main", "All modules initialized — entering main loop");

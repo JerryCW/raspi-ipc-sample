@@ -111,11 +111,19 @@ class ActivityDetector:
 
     def process_frame(self, frame: np.ndarray, timestamp_ms: int) -> None:
         """Run YOLO inference on a single frame and update sessions."""
+        import time as _time
+        t0 = _time.monotonic()
+
         try:
             results = self.model.predict(frame, verbose=False)
         except Exception as exc:
             logger.warning("YOLO inference failed, skipping frame: %s", exc)
             return
+
+        inference_ms = (_time.monotonic() - t0) * 1000
+
+        # Collect detections for debug logging
+        detections = []
 
         # Check disk protection before processing detections
         disk_ok = self._disk_space_ok()
@@ -132,6 +140,9 @@ class ActivityDetector:
                 cls_name = COCO_CLASS_MAP.get(cls_id)
                 if cls_name is None:
                     continue
+
+                detections.append(f"{cls_name}:{conf:.2f}")
+
                 if conf < self.config.confidence_threshold:
                     continue
 
@@ -149,6 +160,12 @@ class ActivityDetector:
                     continue
 
                 self.session_mgr.on_detection(cls_name, conf, timestamp_ms, frame)
+
+        # Per-frame log: inference time + detections
+        if detections:
+            logger.info("Frame ts=%d infer=%.0fms: %s", timestamp_ms, inference_ms, ", ".join(detections))
+        else:
+            logger.debug("Frame ts=%d infer=%.0fms: no targets", timestamp_ms, inference_ms)
 
         # Check for timed-out sessions
         self.check_session_timeouts(timestamp_ms)

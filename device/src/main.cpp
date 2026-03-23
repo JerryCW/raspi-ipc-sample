@@ -400,6 +400,8 @@ int main(int argc, char* argv[]) {
     // Frame pull thread state — declared here so shutdown lambdas can capture them
     std::atomic<bool> frame_pull_running{false};
     std::unique_ptr<std::thread> frame_pull_thread;
+    std::atomic<bool> ai_feed_running{false};
+    std::unique_ptr<std::thread> ai_feed_thread;
 
     ShutdownHandler shutdown_handler;
     {
@@ -569,8 +571,6 @@ int main(int argc, char* argv[]) {
 #endif
 
     // ── AI frame feed thread (GStreamer ai_sink → FrameBufferPool) ──
-    std::atomic<bool> ai_feed_running{false};
-    std::unique_ptr<std::thread> ai_feed_thread;
 #ifdef HAS_GSTREAMER
     {
         GstElement* pipeline_element = gst_pipeline->get_pipeline_element();
@@ -613,10 +613,9 @@ int main(int argc, char* argv[]) {
                                     info.width = static_cast<uint32_t>(width);
                                     info.height = static_cast<uint32_t>(height);
                                     info.sequence_number = ++seq;
-                                    if (GST_BUFFER_PTS_IS_VALID(buffer)) {
-                                        info.timestamp_us = GST_BUFFER_PTS(buffer) / 1000;
-                                    }
-                                    fb->fill(map.data, map.size, info);
+                                    info.timestamp = std::chrono::steady_clock::now();
+                                    std::vector<uint8_t> frame_data(map.data, map.data + map.size);
+                                    fb->reset(std::move(frame_data), info);
                                     frame_pool->submit(std::move(fb));
                                 }
 

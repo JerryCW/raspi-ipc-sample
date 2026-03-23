@@ -169,11 +169,12 @@ class ActivityDetector:
 
                 self.session_mgr.on_detection(cls_name, conf, timestamp_ms, frame)
 
-        # Per-frame log: inference time + detections
+        # Per-frame log: model + inference time + detections
+        model_name = getattr(self.model, "model_name", "unknown")
         if detections:
-            logger.info("Frame ts=%d infer=%.0fms: %s", timestamp_ms, inference_ms, ", ".join(detections))
+            logger.info("[%s] Frame ts=%d infer=%.0fms: %s", model_name, timestamp_ms, inference_ms, ", ".join(detections))
         else:
-            logger.debug("Frame ts=%d infer=%.0fms: no targets", timestamp_ms, inference_ms)
+            logger.debug("[%s] Frame ts=%d infer=%.0fms: no targets", model_name, timestamp_ms, inference_ms)
 
         # Check for timed-out sessions
         self.check_session_timeouts(timestamp_ms)

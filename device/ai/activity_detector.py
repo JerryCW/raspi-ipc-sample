@@ -48,7 +48,7 @@ class ActivityDetector:
         try:
             from ultralytics import YOLO
 
-            self.model = YOLO("yolov8n.pt")
+            self.model = YOLO("yolo11n.pt")
         except Exception as exc:
             logger.error("Failed to load YOLOv8n model: %s", exc)
             sys.exit(1)

@@ -100,9 +100,9 @@ export function EventsPanel({ idToken, streamName, credentials, region }: Events
   return (
     <div className="flex flex-col gap-4">
       {/* Top: Video player (full width) */}
-      <div className="relative w-full overflow-hidden rounded-2xl shadow-lg bg-gray-900">
+      <div className="relative w-full overflow-hidden rounded-2xl shadow-2xl bg-gray-900 aspect-video">
         {isIdle ? (
-          <div className="aspect-video flex items-center justify-center text-gray-400">
+          <div className="absolute inset-0 flex items-center justify-center text-gray-400">
             <div className="text-center">
               <svg className="mx-auto mb-2 h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />

@@ -15,7 +15,7 @@ export function Layout({ children, onLogout }: LayoutProps) {
     <div className="flex min-h-screen flex-col bg-surface">
       {/* Header */}
       <header className="sticky top-0 z-50 flex items-center justify-between border-b border-black/10 bg-white/70 px-6 py-3 backdrop-blur-xl">
-        <h1 className="text-lg font-semibold text-brand-600">KVS Camera Viewer</h1>
+        <h1 className="text-lg font-semibold text-brand-600">RaspiEye</h1>
         {onLogout && (
           <>
             {/* Desktop: text button */}
@@ -42,7 +42,7 @@ export function Layout({ children, onLogout }: LayoutProps) {
       </header>
 
       {/* Content */}
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6">
+      <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-6">
         {children}
       </main>
     </div>

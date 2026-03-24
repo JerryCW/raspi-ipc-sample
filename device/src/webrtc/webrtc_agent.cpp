@@ -761,6 +761,41 @@ void WebRTCAgent::handle_sdp_offer(const std::string& viewer_id,
                                    const std::string& sdp_offer) {
     std::unique_lock lock(mutex_);
 
+    // Force cleanup: remove any existing peer for this viewer_id
+    // (prevents stale peer connections from corrupting SDK state)
+    {
+        auto it = peers_.find(viewer_id);
+        if (it != peers_.end()) {
+            if (it->second.state == PeerInfo::State::CONNECTED) {
+                viewer_count_.fetch_sub(1);
+            }
+            if (it->second.peer_connection != nullptr) {
+                closePeerConnection(it->second.peer_connection);
+                freePeerConnection(&it->second.peer_connection);
+                it->second.peer_connection = nullptr;
+            }
+            peers_.erase(it);
+        }
+    }
+
+    // Also force cleanup ALL disconnecting peers to free SDK resources
+    // (prevents resource leaks that cause "Object not initialized" errors)
+    {
+        auto it = peers_.begin();
+        while (it != peers_.end()) {
+            if (it->second.state == PeerInfo::State::DISCONNECTING) {
+                if (it->second.peer_connection != nullptr) {
+                    closePeerConnection(it->second.peer_connection);
+                    freePeerConnection(&it->second.peer_connection);
+                    it->second.peer_connection = nullptr;
+                }
+                it = peers_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     // Check viewer capacity
     if (viewer_count_.load() >= config_.max_viewers) {
         return;

@@ -49,6 +49,7 @@ export function TabView({
     (tab: TabId) => {
       if (tab === activeTab) return;
       setActiveTab(tab);
+      window.scrollTo({ top: 0 });
     },
     [activeTab],
   );
@@ -56,12 +57,13 @@ export function TabView({
   return (
     <div className="flex flex-col gap-4">
       {/* Segmented Control tab bar */}
-      <div className="bg-gray-100 rounded-full p-1 inline-flex w-full sm:w-auto">
+      <div className="flex justify-center">
+        <div className="bg-gray-100 rounded-full p-1 inline-flex">
         {TABS.map((tab) => (
           <button
             key={tab.id}
             onClick={() => handleTabChange(tab.id)}
-            className={`px-4 py-1.5 text-sm font-medium rounded-full transition-all duration-200 flex-1 sm:flex-none ${
+            className={`px-4 py-1.5 text-sm font-medium rounded-full transition-all duration-200 ${
               activeTab === tab.id
                 ? 'bg-brand-500 text-white shadow-sm'
                 : 'text-gray-600 hover:text-gray-900'
@@ -70,17 +72,18 @@ export function TabView({
             {tab.label}
           </button>
         ))}
+        </div>
       </div>
 
       {/* All panels always mounted, toggle visibility with CSS */}
-      <div className={activeTab === 'webrtc' ? '' : 'hidden'}>
+      <div className={activeTab === 'webrtc' ? 'min-h-[80vh]' : 'hidden'}>
         <WebRTCPanel
           channelName={channelName}
           credentials={credentials}
           region={region}
         />
       </div>
-      <div className={activeTab === 'hls' ? '' : 'hidden'}>
+      <div className={activeTab === 'hls' ? 'min-h-[80vh]' : 'hidden'}>
         <HLSPanel
           streamName={streamName}
           credentials={credentials}
@@ -88,7 +91,7 @@ export function TabView({
           preloadedFragments={preloadedFragments}
         />
       </div>
-      <div className={activeTab === 'events' ? '' : 'hidden'}>
+      <div className={activeTab === 'events' ? 'min-h-[80vh]' : 'hidden'}>
         <EventsPanel
           idToken={idToken}
           streamName={streamName}

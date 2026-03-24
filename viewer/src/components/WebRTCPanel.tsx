@@ -70,7 +70,6 @@ export function WebRTCPanel({ channelName, credentials, region }: WebRTCPanelPro
     onLog: addLog,
   });
 
-  // Auto-scroll debug log to bottom
   useEffect(() => {
     if (showDebugLog) {
       logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -80,6 +79,41 @@ export function WebRTCPanel({ channelName, credentials, region }: WebRTCPanelPro
   const isIdle = status === 'idle' || status === 'stopped';
   const isConnecting = status === 'connecting' || status === 'reconnecting';
   const isConnected = status === 'connected';
+
+  // Real-time clock for overlay (UTC+8)
+  const [clockStr, setClockStr] = useState('');
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date();
+      const utc8 = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+      setClockStr(utc8.toISOString().replace('T', ' ').slice(0, 19));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const [showStopBtn, setShowStopBtn] = useState(false);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleMouseEnter = useCallback(() => {
+    if (!isIdle && !isConnecting) {
+      hoverTimerRef.current = setTimeout(() => setShowStopBtn(true), 1000);
+    }
+  }, [isIdle, isConnecting]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (hoverTimerRef.current) {
+      clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+    setShowStopBtn(false);
+  }, []);
+
+  // Reset showStopBtn when status changes
+  useEffect(() => {
+    if (isIdle) setShowStopBtn(false);
+  }, [isIdle]);
 
   const handleToggle = () => {
     if (isIdle) {
@@ -91,10 +125,20 @@ export function WebRTCPanel({ channelName, credentials, region }: WebRTCPanelPro
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Video card with connection indicator */}
-      <div className="relative w-full overflow-hidden rounded-2xl shadow-lg bg-gray-900 aspect-video">
+      {/* Video card — toggle button inside, hover-to-show when playing */}
+      <div className="group relative w-full overflow-hidden rounded-2xl shadow-2xl bg-gray-900 aspect-video cursor-pointer"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
         {/* Connection indicator dot */}
         <span className={`absolute top-3 right-3 z-10 h-2 w-2 rounded-full ${getIndicatorColor(status)}`} />
+
+        {/* Date/time overlay */}
+        {!isIdle && (
+          <span className="absolute top-3 left-3 z-10 rounded-lg bg-black/50 px-2 py-1 text-xs text-white/90 font-mono">
+            {clockStr}
+          </span>
+        )}
 
         <video
           ref={videoRef}
@@ -103,61 +147,52 @@ export function WebRTCPanel({ channelName, credentials, region }: WebRTCPanelPro
           muted
           className={`absolute inset-0 h-full w-full object-contain ${isIdle ? 'hidden' : ''}`}
         />
-        {isIdle && (
-          <div className="absolute inset-0 flex items-center justify-center text-gray-400">
-            <div className="text-center">
-              <svg className="mx-auto mb-2 h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.75 10.5l4.72-4.72a.75.75 0 011.28.53v11.38a.75.75 0 01-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 002.25-2.25v-9A2.25 2.25 0 0013.5 5.25h-9A2.25 2.25 0 002.25 7.5v9A2.25 2.25 0 004.5 18.75z" />
-              </svg>
-              <p className="text-sm">点击下方按钮查看实时视频</p>
-            </div>
-          </div>
-        )}
+
+        {/* Idle placeholder — just the play button, no text */}
+
+        {/* Connecting spinner */}
         {isConnecting && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+          <div className="absolute inset-0 flex items-center justify-center bg-black/40 z-20">
             <div className="flex flex-col items-center gap-2">
               <div className="h-8 w-8 animate-spin rounded-full border-3 border-brand-400 border-t-transparent" />
               <p className="text-sm text-white/80">连接中...</p>
             </div>
           </div>
         )}
-      </div>
 
-      {/* Control area — toggle button centered below video */}
-      <div className="flex flex-col items-center gap-2">
-        <button
-          onClick={handleToggle}
-          disabled={!credentials && isIdle}
-          className={`flex items-center justify-center rounded-full w-14 h-14 md:w-12 md:h-12 text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-            isConnecting
-              ? 'bg-yellow-500'
-              : isConnected
-                ? 'bg-red-500 hover:bg-red-600'
-                : 'bg-brand-500 hover:bg-brand-600'
-          }`}
-        >
-          {isConnecting ? (
-            /* Spinner */
-            <svg className="h-6 w-6 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-            </svg>
-          ) : isIdle ? (
-            /* Play icon ▶ */
-            <svg className="h-6 w-6 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          ) : (
-            /* Stop icon ■ */
-            <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="6" width="12" height="12" rx="1" />
-            </svg>
-          )}
-        </button>
-        {!credentials && isIdle && (
-          <span className="text-xs text-yellow-600">请先登录获取凭证</span>
+        {/* Center toggle button overlay */}
+        {!isConnecting && (
+          <div className={`absolute inset-0 z-20 flex items-center justify-center transition-opacity duration-300 ${
+            isIdle ? 'opacity-100' : showStopBtn ? 'opacity-100' : 'opacity-0'
+          }`}>
+            <button
+              onClick={handleToggle}
+              disabled={!credentials && isIdle}
+              className={`flex items-center justify-center rounded-full w-16 h-16 text-white shadow-lg transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+                isConnected
+                  ? 'bg-red-500/80 hover:bg-red-600'
+                  : 'bg-brand-500/90 hover:bg-brand-600'
+              }`}
+            >
+              {isIdle ? (
+                <svg className="h-7 w-7 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              ) : (
+                <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+                  <rect x="6" y="6" width="12" height="12" rx="1" />
+                </svg>
+              )}
+            </button>
+          </div>
         )}
       </div>
+
+      {!credentials && isIdle && (
+        <div className="text-center">
+          <span className="text-xs text-yellow-600">请先登录获取凭证</span>
+        </div>
+      )}
 
       {/* Collapsible stats */}
       <div>

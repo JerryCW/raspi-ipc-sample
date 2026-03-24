@@ -105,10 +105,38 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
 
   const isIdle = status === 'idle' || status === 'stopped';
 
+  /** Skip forward/backward by delta seconds. If the target is outside the
+   *  current HLS buffer, restart playback from the new time point. */
+  const handleSkip = useCallback((deltaSec: number) => {
+    const video = videoRef.current;
+    if (!video || !credentials || !stats.currentTime) return;
+
+    const targetTime = new Date(stats.currentTime.getTime() + deltaSec * 1000);
+
+    // Check if target is within buffered range
+    const buffered = video.buffered;
+    let inRange = false;
+    for (let i = 0; i < buffered.length; i++) {
+      const newTime = video.currentTime + deltaSec;
+      if (newTime >= buffered.start(i) && newTime <= buffered.end(i)) {
+        inRange = true;
+        break;
+      }
+    }
+
+    if (inRange) {
+      video.currentTime += deltaSec;
+    } else {
+      // Outside buffer — restart HLS from the target time
+      const windowMs = 60 * 60 * 1000;
+      start(targetTime, new Date(targetTime.getTime() + windowMs));
+    }
+  }, [videoRef, credentials, stats.currentTime, start]);
+
   return (
     <div className="flex flex-col gap-4">
       {/* Video card — matches WebRTCPanel style */}
-      <div className="relative w-full overflow-hidden rounded-2xl shadow-lg bg-gray-900 aspect-video">
+      <div className="relative w-full overflow-hidden rounded-2xl shadow-2xl bg-gray-900 aspect-video">
         <video
           ref={videoRef}
           autoPlay
@@ -135,6 +163,13 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
             </div>
           </div>
         )}
+
+        {/* Playback time overlay */}
+        {!isIdle && stats.currentTime && (
+          <span className="absolute top-3 left-3 z-10 rounded-lg bg-black/50 px-2 py-1 text-xs text-white/90 font-mono">
+            {new Date(stats.currentTime.getTime() + 8 * 60 * 60 * 1000).toISOString().replace('T', ' ').slice(0, 19)}
+          </span>
+        )}
       </div>
 
       <Timeline
@@ -151,7 +186,7 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
         <div className="flex items-center gap-2">
           {/* Rewind 60s */}
           <button
-            onClick={() => { if (videoRef.current) videoRef.current.currentTime -= 60; }}
+            onClick={() => handleSkip(-60)}
             disabled={isIdle}
             className="flex items-center justify-center rounded-xl px-2.5 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -160,7 +195,7 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
 
           {/* Rewind 15s */}
           <button
-            onClick={() => { if (videoRef.current) videoRef.current.currentTime -= 15; }}
+            onClick={() => handleSkip(-15)}
             disabled={isIdle}
             className="flex items-center justify-center rounded-xl px-2.5 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -180,7 +215,7 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
 
           {/* Fast-forward 15s */}
           <button
-            onClick={() => { if (videoRef.current) videoRef.current.currentTime += 15; }}
+            onClick={() => handleSkip(15)}
             disabled={isIdle}
             className="flex items-center justify-center rounded-xl px-2.5 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -189,7 +224,7 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
 
           {/* Fast-forward 60s */}
           <button
-            onClick={() => { if (videoRef.current) videoRef.current.currentTime += 60; }}
+            onClick={() => handleSkip(60)}
             disabled={isIdle}
             className="flex items-center justify-center rounded-xl px-2.5 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >

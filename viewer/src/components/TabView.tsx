@@ -55,16 +55,16 @@ export function TabView({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Tab bar */}
-      <div className="flex border-b border-gray-200">
+      {/* Segmented Control tab bar */}
+      <div className="bg-gray-100 rounded-full p-1 inline-flex w-full sm:w-auto">
         {TABS.map((tab) => (
           <button
             key={tab.id}
             onClick={() => handleTabChange(tab.id)}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${
+            className={`px-4 py-1.5 text-sm font-medium rounded-full transition-all duration-200 flex-1 sm:flex-none ${
               activeTab === tab.id
-                ? 'border-b-2 border-blue-600 text-blue-600'
-                : 'text-gray-500 hover:text-gray-700'
+                ? 'bg-brand-500 text-white shadow-sm'
+                : 'text-gray-600 hover:text-gray-900'
             }`}
           >
             {tab.label}

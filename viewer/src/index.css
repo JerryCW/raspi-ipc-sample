@@ -1,1 +1,20 @@
 @import "tailwindcss";
+
+@theme {
+  /* Deloitte Green 色阶 */
+  --color-brand-50: #f4f9e8;
+  --color-brand-100: #e6f2cc;
+  --color-brand-200: #cee69e;
+  --color-brand-300: #b3d76b;
+  --color-brand-400: #9ccc42;
+  --color-brand-500: #86BC25;
+  --color-brand-600: #6b961e;
+  --color-brand-700: #527218;
+  --color-brand-800: #3d5513;
+  --color-brand-900: #2a3b0e;
+  --color-brand-950: #172008;
+
+  /* 语义化颜色 */
+  --color-surface: #f5f5f7;
+  --color-text-primary: #1d1d1f;
+}

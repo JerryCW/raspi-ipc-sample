@@ -471,6 +471,9 @@ void WebRTCAgent::on_viewer_change(ViewerCallback cb) {
 }
 
 void WebRTCAgent::signaling_reconnect_loop() {
+    int consecutive_failures = 0;
+    const int kMaxFailuresBeforeRebuild = 3;
+
     while (running_.load() && reconnecting_.load()) {
         auto result = attempt_signaling_connect();
 
@@ -478,7 +481,29 @@ void WebRTCAgent::signaling_reconnect_loop() {
             signaling_connected_.store(true);
             reconnecting_.store(false);
             signaling_retry_delay_sec_ = kInitialSignalingRetryDelaySec;
+            consecutive_failures = 0;
             break;
+        }
+
+        consecutive_failures++;
+
+        // After repeated failures, destroy and recreate the signaling client
+        // to recover from a broken SDK state machine (e.g., 0x5d000034)
+        if (consecutive_failures >= kMaxFailuresBeforeRebuild) {
+            if (signaling_client_handle_ != INVALID_SIGNALING_CLIENT_HANDLE_VALUE) {
+                signalingClientDisconnectSync(signaling_client_handle_);
+                freeSignalingClient(&signaling_client_handle_);
+                signaling_client_handle_ = INVALID_SIGNALING_CLIENT_HANDLE_VALUE;
+            }
+
+            // Recreate signaling client from scratch
+            createSignalingClientSync(
+                &client_info_, &channel_info_,
+                &signaling_callbacks_,
+                credential_provider_,
+                &signaling_client_handle_);
+
+            consecutive_failures = 0;
         }
 
         // Exponential backoff: initial 2s, max 60s
@@ -977,10 +1002,22 @@ STATUS WebRTCAgent::on_signaling_error(UINT64 custom_data,
                                         STATUS status,
                                         PCHAR msg,
                                         UINT32 msg_len) {
-    UNUSED_PARAM(custom_data);
-    UNUSED_PARAM(status);
+    auto* self = reinterpret_cast<WebRTCAgent*>(custom_data);
     UNUSED_PARAM(msg);
     UNUSED_PARAM(msg_len);
+
+    // Trigger reconnection on signaling errors (e.g., 0x5d000034 reconnect failed)
+    if (self != nullptr && self->running_.load() && !self->signaling_connected_.load()) {
+        bool expected = false;
+        if (self->reconnecting_.compare_exchange_strong(expected, true)) {
+            if (self->reconnect_thread_ && self->reconnect_thread_->joinable()) {
+                self->reconnect_thread_->join();
+            }
+            self->reconnect_thread_ = std::make_unique<std::thread>(
+                &WebRTCAgent::signaling_reconnect_loop, self);
+        }
+    }
+
     return STATUS_SUCCESS;
 }
 

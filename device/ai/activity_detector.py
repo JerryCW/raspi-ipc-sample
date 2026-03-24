@@ -151,7 +151,11 @@ class ActivityDetector:
 
                 detections.append(f"{cls_name}:{conf:.2f}")
 
-                if conf < self.config.confidence_threshold:
+                # Use per-class threshold if configured, otherwise default
+                threshold = self.config.confidence_overrides.get(
+                    cls_name, self.config.confidence_threshold
+                )
+                if conf < threshold:
                     continue
 
                 # Disk protection: skip new session creation when limits exceeded

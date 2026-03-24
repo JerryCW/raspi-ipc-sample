@@ -32,7 +32,7 @@ export function ConfigPanel({
           type="text"
           value={region}
           onChange={(e) => onRegionChange(e.target.value)}
-          className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
         />
       </div>
       <div className="flex flex-col gap-1">
@@ -44,7 +44,7 @@ export function ConfigPanel({
           type="text"
           value={channelName}
           onChange={(e) => onChannelNameChange(e.target.value)}
-          className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
         />
       </div>
       <div className="flex flex-col gap-1">
@@ -56,7 +56,7 @@ export function ConfigPanel({
           type="text"
           value={streamName}
           onChange={(e) => onStreamNameChange(e.target.value)}
-          className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
         />
       </div>
     </div>

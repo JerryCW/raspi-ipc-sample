@@ -22,10 +22,20 @@ function LoginForm({
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-gray-100 to-blue-50">
-      <div className="w-full max-w-sm rounded-xl bg-white p-8 shadow-lg">
+    <div className="flex min-h-screen items-center justify-center bg-surface px-4">
+      <div className="w-full max-w-sm rounded-2xl backdrop-blur-xl bg-white/70 p-8 shadow-lg">
+        {/* Logo / Icon */}
+        <div className="mb-4 flex justify-center">
+          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-50">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-brand-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          </div>
+        </div>
+
         <div className="mb-6 text-center">
-          <h1 className="text-2xl font-bold text-gray-900">RaspiEye</h1>
+          <h1 className="text-2xl font-bold text-text-primary">RaspiEye</h1>
           <p className="mt-1 text-sm text-gray-500">登录以查看摄像头视频</p>
         </div>
 
@@ -42,7 +52,7 @@ function LoginForm({
               placeholder="admin"
               autoComplete="username"
               required
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
             />
           </div>
 
@@ -58,18 +68,18 @@ function LoginForm({
               placeholder="••••••••"
               autoComplete="current-password"
               required
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="w-full rounded-xl border border-gray-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
             />
           </div>
 
           {error && (
-            <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
+            <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>
           )}
 
           <button
             type="submit"
             disabled={isLoading || !username || !password}
-            className="mt-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="mt-2 rounded-xl bg-brand-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-brand-600 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isLoading ? '登录中...' : '登录'}
           </button>
@@ -84,9 +94,9 @@ function AppContent() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-100">
+      <div className="flex min-h-screen items-center justify-center bg-surface">
         <div className="text-center">
-          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent" />
+          <div className="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-brand-500 border-t-transparent" />
           <p className="text-sm text-gray-600">正在验证身份...</p>
         </div>
       </div>

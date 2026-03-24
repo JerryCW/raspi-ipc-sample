@@ -29,6 +29,7 @@ class DetectorConfig:
     # Activity Detector params
     detect_classes: List[str] = field(default_factory=lambda: ["person", "cat", "dog", "bird"])
     confidence_threshold: float = 0.5
+    confidence_overrides: dict = field(default_factory=dict)  # per-class, e.g. {"bird": 0.2}
     session_timeout_sec: int = 60
     capture_dir: str = "/var/lib/smart-camera/captures/"
     capture_max_files: int = 500
@@ -97,5 +98,16 @@ def _coerce(raw: str, type_hint: str | type, field_name: str) -> object:
         if isinstance(raw, list):
             return raw
         return [s.strip() for s in raw.split(",") if s.strip()]
+    if hint in ("dict",):
+        if isinstance(raw, dict):
+            return raw
+        # Parse "bird:0.2,cat:0.3" format
+        result = {}
+        for pair in raw.split(","):
+            pair = pair.strip()
+            if ":" in pair:
+                k, v = pair.split(":", 1)
+                result[k.strip()] = float(v.strip())
+        return result
     # Fallback: return as-is
     return raw

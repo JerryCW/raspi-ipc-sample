@@ -122,6 +122,9 @@ const Timeline: React.FC<TimelineProps> = ({
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
 
+  // Hover tooltip state
+  const [hoverInfo, setHoverInfo] = useState<{ x: number; time: string } | null>(null);
+
   // Selected date state — defaults to today in UTC+8
   const [selectedDate, setSelectedDate] = useState(() => formatDateUTC8(new Date()));
 
@@ -173,6 +176,46 @@ const Timeline: React.FC<TimelineProps> = ({
     },
     [dayStart, dayEnd, rangeMs, onTimeSelect]
   );
+
+  /** Convert a clientX position to a formatted HH:MM:SS time string. */
+  const xToTime = useCallback(
+    (clientX: number): { x: number; time: string } | null => {
+      const svg = svgRef.current;
+      if (!svg) return null;
+      const rect = svg.getBoundingClientRect();
+      const x = clientX - rect.left;
+      const ms = dayStart + (x / rect.width) * rangeMs;
+      const clamped = Math.max(dayStart, Math.min(dayEnd, ms));
+      const d = new Date(clamped + UTC8_OFFSET_MS);
+      const time = d.toISOString().slice(11, 19); // HH:MM:SS
+      return { x, time };
+    },
+    [dayStart, dayEnd, rangeMs],
+  );
+
+  const handleMouseMove = useCallback(
+    (e: React.MouseEvent<SVGSVGElement>) => {
+      setHoverInfo(xToTime(e.clientX));
+    },
+    [xToTime],
+  );
+
+  const handleMouseLeave = useCallback(() => {
+    setHoverInfo(null);
+  }, []);
+
+  const handleTouchMove = useCallback(
+    (e: React.TouchEvent<SVGSVGElement>) => {
+      if (e.touches.length > 0) {
+        setHoverInfo(xToTime(e.touches[0].clientX));
+      }
+    },
+    [xToTime],
+  );
+
+  const handleTouchEnd = useCallback(() => {
+    setHoverInfo(null);
+  }, []);
 
   // "Now" indicator position (only show if today)
   const isToday = formatDateUTC8(new Date(nowMs)) === selectedDate;
@@ -234,7 +277,7 @@ const Timeline: React.FC<TimelineProps> = ({
         {!isSelectedToday && (
           <button
             onClick={goToToday}
-            className="rounded bg-blue-100 px-2 py-1 text-blue-700 hover:bg-blue-200"
+            className="rounded bg-brand-100 px-2 py-1 text-brand-700 hover:bg-brand-200"
           >
             今天
           </button>
@@ -242,13 +285,32 @@ const Timeline: React.FC<TimelineProps> = ({
       </div>
 
       {/* SVG Timeline */}
-      <div className="w-full select-none">
+      <div className="relative w-full select-none">
+        {/* Hover tooltip */}
+        {hoverInfo && (
+          <div
+            className="pointer-events-none absolute z-10 -translate-x-1/2"
+            style={{ left: hoverInfo.x, top: -36 }}
+          >
+            <div className="rounded-lg bg-gray-900 px-2 py-1 text-xs text-white shadow-lg">
+              {hoverInfo.time}
+            </div>
+            {/* Triangle arrow pointing down */}
+            <div className="flex justify-center">
+              <div className="h-0 w-0 border-x-4 border-t-4 border-x-transparent border-t-gray-900" />
+            </div>
+          </div>
+        )}
         <svg
           ref={svgRef}
           width="100%"
           height={SVG_HEIGHT}
           className="cursor-crosshair"
           onClick={handleClick}
+          onMouseMove={handleMouseMove}
+          onMouseLeave={handleMouseLeave}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
         >
           {/* Gray background */}
           <rect x="0" y="0" width="100%" height={TIMELINE_HEIGHT} fill="#e5e7eb" rx={4} />
@@ -260,7 +322,7 @@ const Timeline: React.FC<TimelineProps> = ({
               const xPct = ((s.start - dayStart) / rangeMs) * 100;
               const wPct = ((s.end - s.start) / rangeMs) * 100;
               return (
-                <rect key={i} x={`${xPct}%`} y="0" width={`${wPct}%`} height={TIMELINE_HEIGHT} fill="#22c55e" opacity={0.8} rx={2} />
+                <rect key={i} x={`${xPct}%`} y="0" width={`${wPct}%`} height={TIMELINE_HEIGHT} fill="#86BC25" opacity={0.8} rx={2} />
               );
             })}
 
@@ -270,11 +332,11 @@ const Timeline: React.FC<TimelineProps> = ({
               <line
                 x1={`${nowPct}%`} y1="0"
                 x2={`${nowPct}%`} y2={TIMELINE_HEIGHT}
-                stroke="#3b82f6" strokeWidth={1.5} strokeDasharray="4 2"
+                stroke="#86BC25" strokeWidth={1.5} strokeDasharray="4 2"
               />
               <polygon
                 points={`${nowPct}%,-1 ${nowPct - 0.6}%,8 ${nowPct + 0.6}%,8`}
-                fill="#3b82f6"
+                fill="#86BC25"
                 transform={`translate(0, 0)`}
               />
               {/* Use absolute pixel positioning for triangle via a foreignObject workaround */}
@@ -325,14 +387,14 @@ const Timeline: React.FC<TimelineProps> = ({
       {/* Legend */}
       <div className="flex items-center gap-4 text-xs text-gray-500">
         <span className="flex items-center gap-1">
-          <span className="inline-block h-2.5 w-2.5 rounded-sm bg-green-500 opacity-80" /> 有录像
+          <span className="inline-block h-2.5 w-2.5 rounded-sm bg-brand-500 opacity-80" /> 有录像
         </span>
         <span className="flex items-center gap-1">
           <span className="inline-block h-2.5 w-2.5 rounded-sm bg-gray-300" /> 无录像
         </span>
         {isToday && (
           <span className="flex items-center gap-1">
-            <span className="inline-block h-2.5 w-0.5 bg-blue-500" style={{ borderLeft: '2px dashed #3b82f6' }} /> 当前时间
+            <span className="inline-block h-2.5 w-0.5 bg-brand-500" style={{ borderLeft: '2px dashed #86BC25' }} /> 当前时间
           </span>
         )}
         <span className="flex items-center gap-1">

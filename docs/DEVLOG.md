@@ -1550,3 +1550,35 @@ _暂无。_
 **涉及的文件/组件：** device/ai/tests/test_config.py（修复 `%` 字符问题）
 
 ---
+
+### 2026-03-24 — 任务: viewer-ui-redesign 1.1 设计系统
+
+**概要：** 在 `viewer/src/index.css` 中添加 Tailwind CSS v4 `@theme` 指令，定义 Deloitte Green 色阶 (50-950) 和语义化颜色 (surface, text-primary)。
+
+**遇到的问题：** 顺利完成，无问题。
+
+**经验教训：** Tailwind v4 使用 `@theme` 指令替代 `tailwind.config.js`，直接在 CSS 中定义设计令牌。
+
+**涉及的文件/组件：** `viewer/src/index.css`
+
+---
+
+### 2026-03-24 — 任务: viewer-ui-redesign 2.1 登录页面重新设计
+
+**概要：** 更新 App.tsx 中 LoginForm 样式，替换所有蓝色类名为 brand 色系，添加毛玻璃效果、Logo 图标、圆角统一。
+
+**遇到的问题：** 顺利完成，无问题。
+
+**涉及的文件/组件：** `viewer/src/App.tsx`
+
+---
+
+### 2026-03-24 — 任务: viewer-ui-redesign 3.1 页面布局重新设计
+
+**概要：** 更新 Layout.tsx，导航栏改为毛玻璃效果，品牌标识使用 brand-600，背景改为 bg-surface，登出按钮手机端使用图标形式。
+
+**遇到的问题：** 顺利完成，无问题。
+
+**涉及的文件/组件：** `viewer/src/components/Layout.tsx`
+
+---

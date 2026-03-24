@@ -56,8 +56,8 @@ function toInputDate(d: Date): string {
 // ===== Component =====
 
 /**
- * Activity events panel — left-right split layout.
- * Left: 16:9 HLS video player. Right: date picker + event list.
+ * Activity events panel — top-bottom layout.
+ * Top: full-width HLS video player. Bottom: date picker + event list.
  * Clicking an event plays its recording in the embedded player.
  *
  * Validates: Requirements 5.3, 5.5, 5.7
@@ -98,52 +98,51 @@ export function EventsPanel({ idToken, streamName, credentials, region }: Events
   const isIdle = status === 'idle' || status === 'stopped';
 
   return (
-    <div className="flex flex-col gap-4 lg:flex-row">
-      {/* Left: Video player (60%) */}
-      <div className="w-full lg:w-[60%]">
-        <div className="relative w-full overflow-hidden rounded-lg bg-gray-900" style={{ aspectRatio: '16/9' }}>
+    <div className="flex flex-col gap-4">
+      {/* Top: Video player (full width) */}
+      <div className="relative w-full overflow-hidden rounded-2xl shadow-lg bg-gray-900">
+        {isIdle ? (
+          <div className="aspect-video flex items-center justify-center text-gray-400">
+            <div className="text-center">
+              <svg className="mx-auto mb-2 h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.91 11.672a.375.375 0 010 .656l-5.603 3.113a.375.375 0 01-.557-.328V8.887c0-.286.307-.466.557-.327l5.603 3.112z" />
+              </svg>
+              <p className="text-sm">点击下方事件查看回放</p>
+            </div>
+          </div>
+        ) : (
           <video
             ref={videoRef}
             autoPlay
             playsInline
             muted
-            className="absolute inset-0 h-full w-full object-contain"
+            className="w-full object-contain"
           />
-          {isIdle && (
-            <div className="absolute inset-0 flex items-center justify-center text-gray-400">
-              <div className="text-center">
-                <svg className="mx-auto mb-2 h-12 w-12" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.91 11.672a.375.375 0 010 .656l-5.603 3.113a.375.375 0 01-.557-.328V8.887c0-.286.307-.466.557-.327l5.603 3.112z" />
-                </svg>
-                <p className="text-sm">点击右侧事件查看回放</p>
-              </div>
-            </div>
-          )}
-          {status === 'connecting' && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/30">
-              <div className="h-8 w-8 animate-spin rounded-full border-2 border-white border-t-transparent" />
-            </div>
-          )}
-        </div>
+        )}
+        {status === 'connecting' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+            <div className="h-8 w-8 animate-spin rounded-full border-2 border-white border-t-transparent" />
+          </div>
+        )}
       </div>
 
-      {/* Right: Date picker + event list (40%) */}
-      <div className="flex w-full flex-col gap-4 lg:w-[40%]">
+      {/* Bottom: Date picker + event list */}
+      <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">活动事件</h2>
           <input
             type="date"
             value={toInputDate(selectedDate)}
             onChange={handleDateChange}
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
           />
         </div>
 
         {/* Loading state */}
         {isLoading && (
           <div className="flex items-center justify-center py-12">
-            <div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+            <div className="h-6 w-6 animate-spin rounded-full border-2 border-brand-500 border-t-transparent" />
             <span className="ml-2 text-sm text-gray-500">加载中...</span>
           </div>
         )}
@@ -154,7 +153,7 @@ export function EventsPanel({ idToken, streamName, credentials, region }: Events
             <p className="text-sm text-red-600">{error}</p>
             <button
               onClick={retry}
-              className="mt-2 rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700"
+              className="mt-2 rounded-xl bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700"
             >
               重试
             </button>
@@ -170,7 +169,7 @@ export function EventsPanel({ idToken, streamName, credentials, region }: Events
 
         {/* Event list */}
         {!isLoading && !error && events.length > 0 && (
-          <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 300px)' }}>
+          <div className="flex flex-col gap-2 overflow-y-auto max-h-[50vh]">
             {events.map((event) => (
               <EventCard
                 key={event.sessionId}
@@ -218,10 +217,10 @@ function EventCard({ event, idToken, isActive, onClick }: EventCardProps) {
   return (
     <button
       onClick={handleClick}
-      className={`flex items-center gap-3 rounded-lg border bg-white p-3 text-left transition-colors hover:bg-blue-50 ${
+      className={`flex items-center gap-3 rounded-lg border backdrop-blur-sm bg-white/80 p-3 text-left transition-colors hover:bg-brand-50 ${
         isActive
-          ? 'border-blue-500 ring-1 ring-blue-500'
-          : 'border-gray-200 hover:border-blue-300'
+          ? 'border-brand-500 ring-1 ring-brand-500'
+          : 'border-gray-200 hover:border-brand-300'
       }`}
     >
       {/* Thumbnail or placeholder */}

@@ -160,15 +160,27 @@ class IPCClient:
     def receive_notification(self) -> FrameNotification:
         """Read one JSON-line notification from the socket.
 
-        Blocks until a complete line is available.
+        Blocks until a complete line is available, with a 10-second timeout.
+        If no data arrives within the timeout, raises ConnectionError so
+        the main loop can reconnect.
 
         Raises:
-            ConnectionError: If the socket is closed or not connected.
+            ConnectionError: If the socket is closed, not connected, or timed out.
         """
-        if self._sock_file is None:
+        if self._sock_file is None or self._sock is None:
             raise ConnectionError("Not connected. Call connect() first.")
 
-        line = self._sock_file.readline()
+        # Set 10-second timeout to detect stalled FrameExporter
+        self._sock.settimeout(10.0)
+        try:
+            line = self._sock_file.readline()
+        except socket.timeout:
+            raise ConnectionError("Socket read timed out (10s) — FrameExporter may be stalled")
+        except OSError as exc:
+            raise ConnectionError(f"Socket read error: {exc}")
+        finally:
+            self._sock.settimeout(None)
+
         if not line:
             raise ConnectionError("Socket closed by remote end")
 

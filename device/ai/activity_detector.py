@@ -105,13 +105,17 @@ class ActivityDetector:
                     frame = raw.reshape((notif.height, notif.width, 3))
 
                 self.process_frame(frame, notif.timestamp_ms)
-            except ConnectionError:
-                logger.warning("IPC connection lost, reconnecting…")
+            except ConnectionError as exc:
+                logger.warning("IPC connection lost (%s), reconnecting…", exc)
                 self.ipc.close()
                 self.connect_ipc()
             except KeyboardInterrupt:
                 logger.info("Shutting down ActivityDetector")
                 break
+            except Exception as exc:
+                # Catch-all: log the error and continue processing next frame
+                # This prevents crashes from unexpected errors in frame processing
+                logger.error("Unexpected error in main loop: %s", exc, exc_info=True)
 
     # ------------------------------------------------------------------
     # Frame processing

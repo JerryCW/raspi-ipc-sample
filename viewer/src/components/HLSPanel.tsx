@@ -37,15 +37,12 @@ function formatBitrate(bps: number): string {
   return `${bps} bps`;
 }
 
-const PLAYBACK_RATES = [1, 1.5, 2, 4] as const;
-
 // ===== Component =====
 
 export function HLSPanel({ streamName, credentials, region, preloadedFragments }: HLSPanelProps) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [showDebugLog, setShowDebugLog] = useState(false);
   const [showStats, setShowStats] = useState(false);
-  const [playbackRate, setPlaybackRate] = useState(1);
   const logEndRef = useRef<HTMLDivElement>(null);
   const [timeRange, setTimeRange] = useState(getDefaultTimeRange);
 
@@ -67,13 +64,6 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
       logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [logs, showDebugLog]);
-
-  // Apply playback rate to video element
-  useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.playbackRate = playbackRate;
-    }
-  }, [playbackRate, videoRef]);
 
   // Load fragments when timeRange changes (triggered by date picker)
   const loadedRangeRef = useRef('');
@@ -158,14 +148,23 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
 
       {/* Control row — centered below video */}
       <div className="flex flex-col items-center gap-3">
-        <div className="flex items-center gap-3">
-          {/* Rewind 30s */}
+        <div className="flex items-center gap-2">
+          {/* Rewind 60s */}
           <button
-            onClick={() => { if (videoRef.current) videoRef.current.currentTime -= 30; }}
+            onClick={() => { if (videoRef.current) videoRef.current.currentTime -= 60; }}
             disabled={isIdle}
-            className="flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex items-center justify-center rounded-xl px-2.5 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
-            ⏪ -30s
+            -60s
+          </button>
+
+          {/* Rewind 15s */}
+          <button
+            onClick={() => { if (videoRef.current) videoRef.current.currentTime -= 15; }}
+            disabled={isIdle}
+            className="flex items-center justify-center rounded-xl px-2.5 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            -15s
           </button>
 
           {/* Stop button */}
@@ -179,31 +178,23 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
             </svg>
           </button>
 
-          {/* Fast-forward 30s */}
+          {/* Fast-forward 15s */}
           <button
-            onClick={() => { if (videoRef.current) videoRef.current.currentTime += 30; }}
+            onClick={() => { if (videoRef.current) videoRef.current.currentTime += 15; }}
             disabled={isIdle}
-            className="flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex items-center justify-center rounded-xl px-2.5 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
           >
-            ⏩ +30s
+            +15s
           </button>
-        </div>
 
-        {/* Playback speed selector */}
-        <div className="flex items-center gap-1 rounded-full bg-gray-100 p-1">
-          {PLAYBACK_RATES.map((rate) => (
-            <button
-              key={rate}
-              onClick={() => setPlaybackRate(rate)}
-              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                playbackRate === rate
-                  ? 'bg-brand-500 text-white'
-                  : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              {rate}x
-            </button>
-          ))}
+          {/* Fast-forward 60s */}
+          <button
+            onClick={() => { if (videoRef.current) videoRef.current.currentTime += 60; }}
+            disabled={isIdle}
+            className="flex items-center justify-center rounded-xl px-2.5 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            +60s
+          </button>
         </div>
 
         {!credentials && isIdle && (

@@ -76,7 +76,7 @@ export function WebRTCPanel({ channelName, credentials, region }: WebRTCPanelPro
     }
   }, [logs, showDebugLog]);
 
-  const isIdle = status === 'idle' || status === 'stopped';
+  const isIdle = status === 'idle' || status === 'stopped' || status === 'error';
   const isConnecting = status === 'connecting' || status === 'reconnecting';
   const isConnected = status === 'connected';
 
@@ -150,12 +150,12 @@ export function WebRTCPanel({ channelName, credentials, region }: WebRTCPanelPro
 
         {/* Idle placeholder — just the play button, no text */}
 
-        {/* Connecting spinner */}
+        {/* Connecting spinner — clickable to cancel */}
         {isConnecting && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40 z-20">
+          <div className="absolute inset-0 flex items-center justify-center bg-black/40 z-20 cursor-pointer" onClick={handleToggle}>
             <div className="flex flex-col items-center gap-2">
               <div className="h-8 w-8 animate-spin rounded-full border-3 border-brand-400 border-t-transparent" />
-              <p className="text-sm text-white/80">连接中...</p>
+              <p className="text-sm text-white/80">连接中... 点击取消</p>
             </div>
           </div>
         )}

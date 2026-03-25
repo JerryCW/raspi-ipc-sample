@@ -130,6 +130,14 @@ const Timeline: React.FC<TimelineProps> = ({
   // Selected date state — defaults to today in UTC+8
   const [selectedDate, setSelectedDate] = useState(() => formatDateUTC8(new Date()));
 
+  // Sync selectedDate when parent changes startTime (e.g., HLSPanel date picker)
+  useEffect(() => {
+    if (hideDatePicker) {
+      const parentDate = formatDateUTC8(_startTime);
+      setSelectedDate(parentDate);
+    }
+  }, [hideDatePicker, _startTime]);
+
   // "Now" indicator — update every 30s
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {

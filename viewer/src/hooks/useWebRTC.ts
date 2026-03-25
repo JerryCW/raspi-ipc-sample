@@ -100,6 +100,7 @@ export function createRetryTracker(maxRetries: number) {
 
 const CONNECTION_TIMEOUT_MS = 15_000;
 const MAX_RETRIES = 3;
+const TOTAL_SESSION_TIMEOUT_MS = 60_000; // 60s total timeout — force error if still not connected
 const CLIENT_ID = `viewer-${Date.now()}`;
 
 const INITIAL_STATS: WebRTCStats = {
@@ -152,6 +153,7 @@ export function useWebRTC(config: {
   const wsRef = useRef<WebSocket | null>(null);
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const retryRef = useRef(createRetryTracker(MAX_RETRIES));
   const startTimeRef = useRef<number>(0);
@@ -162,6 +164,10 @@ export function useWebRTC(config: {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
+    }
+    if (sessionTimeoutRef.current) {
+      clearTimeout(sessionTimeoutRef.current);
+      sessionTimeoutRef.current = null;
     }
     if (statsIntervalRef.current) {
       clearInterval(statsIntervalRef.current);
@@ -354,10 +360,14 @@ export function useWebRTC(config: {
         setStatus(mappedStatus);
 
         if (iceState === 'connected' || iceState === 'completed') {
-          // Connection established — clear timeout, reset retries
+          // Connection established — clear timeouts, reset retries
           if (timeoutRef.current) {
             clearTimeout(timeoutRef.current);
             timeoutRef.current = null;
+          }
+          if (sessionTimeoutRef.current) {
+            clearTimeout(sessionTimeoutRef.current);
+            sessionTimeoutRef.current = null;
           }
           retryRef.current.reset();
           startStatsCollection();
@@ -529,8 +539,18 @@ export function useWebRTC(config: {
     cleanup();
     retryRef.current.reset();
     isStoppedRef.current = false;
+
+    // Total session timeout: if not connected within 60s (across all retries),
+    // force status to 'error' so the user can retry manually
+    sessionTimeoutRef.current = setTimeout(() => {
+      if (isStoppedRef.current) return;
+      onLog('Total session timeout (60s) — connection failed');
+      cleanup();
+      setStatus('error');
+    }, TOTAL_SESSION_TIMEOUT_MS);
+
     await connect();
-  }, [cleanup, connect]);
+  }, [cleanup, connect, onLog]);
 
   // Cleanup on unmount
   useEffect(() => {

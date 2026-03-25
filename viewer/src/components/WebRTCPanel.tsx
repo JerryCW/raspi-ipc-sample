@@ -145,7 +145,7 @@ export function WebRTCPanel({ channelName, credentials, region }: WebRTCPanelPro
           autoPlay
           playsInline
           muted
-          className={`absolute inset-0 h-full w-full object-contain ${isIdle ? 'hidden' : ''}`}
+          className={`absolute inset-0 h-full w-full object-cover ${isIdle ? 'hidden' : ''}`}
         />
 
         {/* Idle placeholder — just the play button, no text */}

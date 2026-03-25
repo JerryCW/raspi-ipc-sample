@@ -142,7 +142,7 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
           autoPlay
           playsInline
           muted
-          className={`absolute inset-0 h-full w-full object-contain ${isIdle ? 'hidden' : ''}`}
+          className={`absolute inset-0 h-full w-full object-cover ${isIdle ? 'hidden' : ''}`}
         />
         {isIdle && (
           <div className="absolute inset-0 flex items-center justify-center text-gray-400">

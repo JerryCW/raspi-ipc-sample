@@ -1042,7 +1042,10 @@ STATUS WebRTCAgent::on_signaling_error(UINT64 custom_data,
     UNUSED_PARAM(msg_len);
 
     // Trigger reconnection on signaling errors (e.g., 0x5d000034 reconnect failed)
-    if (self != nullptr && self->running_.load() && !self->signaling_connected_.load()) {
+    // Always mark as disconnected and attempt reconnect — the state_changed callback
+    // may not fire when the SDK state machine exits abnormally
+    if (self != nullptr && self->running_.load()) {
+        self->signaling_connected_.store(false);
         bool expected = false;
         if (self->reconnecting_.compare_exchange_strong(expected, true)) {
             if (self->reconnect_thread_ && self->reconnect_thread_->joinable()) {

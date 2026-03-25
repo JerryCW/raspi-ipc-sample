@@ -136,7 +136,7 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
   return (
     <div className="flex flex-col gap-4">
       {/* Video card — matches WebRTCPanel style */}
-      <div className="relative w-full overflow-hidden rounded-2xl shadow-2xl bg-gray-900 aspect-video">
+      <div className="relative w-full overflow-hidden rounded-2xl bg-gray-900 aspect-video ring-2 ring-brand-500/40" style={{boxShadow: '0 4px 30px rgba(134,188,37,0.8)'}}>
         <video
           ref={videoRef}
           autoPlay
@@ -172,6 +172,84 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
         )}
       </div>
 
+      {/* Control row: skip buttons (left) + date picker (right) */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center w-1/2">
+          <button
+            onClick={() => handleSkip(-60)}
+            disabled={isIdle}
+            className="flex-1 flex items-center justify-center py-1.5 text-gray-500 hover:text-gray-800 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
+            title="-60s"
+          >
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M18.5 19l-7-7 7-7M11.5 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <button
+            onClick={() => handleSkip(-15)}
+            disabled={isIdle}
+            className="flex-1 flex items-center justify-center py-1.5 text-gray-500 hover:text-gray-800 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
+            title="-15s"
+          >
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+            </svg>
+          </button>
+          <button
+            onClick={stop}
+            disabled={isIdle}
+            className="flex-1 flex items-center justify-center py-1.5 text-red-500 hover:text-red-600 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
+            title="停止"
+          >
+            <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+              <rect x="6" y="6" width="12" height="12" rx="2" />
+            </svg>
+          </button>
+          <button
+            onClick={() => handleSkip(15)}
+            disabled={isIdle}
+            className="flex-1 flex items-center justify-center py-1.5 text-gray-500 hover:text-gray-800 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
+            title="+15s"
+          >
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+          </button>
+          <button
+            onClick={() => handleSkip(60)}
+            disabled={isIdle}
+            className="flex-1 flex items-center justify-center py-1.5 text-gray-500 hover:text-gray-800 transition-colors disabled:cursor-not-allowed disabled:opacity-30"
+            title="+60s"
+          >
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5.5 5l7 7-7 7M12.5 5l7 7-7 7" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Date picker (right) */}
+        <input
+          type="date"
+          value={(() => {
+            const utc8 = new Date(timeRange.start.getTime() + 8 * 60 * 60 * 1000);
+            return utc8.toISOString().slice(0, 10);
+          })()}
+          max={(() => {
+            const utc8 = new Date(Date.now() + 8 * 60 * 60 * 1000);
+            return utc8.toISOString().slice(0, 10);
+          })()}
+          onChange={(e) => {
+            if (!e.target.value) return;
+            const [y, m, d] = e.target.value.split('-').map(Number);
+            const utc8Midnight = Date.UTC(y, m - 1, d, 0, 0, 0);
+            const start = new Date(utc8Midnight - 8 * 60 * 60 * 1000);
+            const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+            setTimeRange({ start, end });
+          }}
+          className="w-40 rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+        />
+      </div>
+
       <Timeline
         fragments={fragments}
         startTime={timeRange.start}
@@ -179,63 +257,14 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
         currentTime={stats.currentTime}
         onTimeSelect={handleTimeSelect}
         onRangeChange={handleRangeChange}
+        hideDatePicker
       />
 
-      {/* Control row — centered below video */}
-      <div className="flex flex-col items-center gap-3">
-        <div className="flex items-center gap-2">
-          {/* Rewind 60s */}
-          <button
-            onClick={() => handleSkip(-60)}
-            disabled={isIdle}
-            className="flex items-center justify-center rounded-xl px-2.5 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            -60s
-          </button>
-
-          {/* Rewind 15s */}
-          <button
-            onClick={() => handleSkip(-15)}
-            disabled={isIdle}
-            className="flex items-center justify-center rounded-xl px-2.5 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            -15s
-          </button>
-
-          {/* Stop button */}
-          <button
-            onClick={stop}
-            disabled={isIdle}
-            className="flex items-center justify-center bg-red-500 hover:bg-red-600 rounded-full w-10 h-10 text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="6" width="12" height="12" rx="1" />
-            </svg>
-          </button>
-
-          {/* Fast-forward 15s */}
-          <button
-            onClick={() => handleSkip(15)}
-            disabled={isIdle}
-            className="flex items-center justify-center rounded-xl px-2.5 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            +15s
-          </button>
-
-          {/* Fast-forward 60s */}
-          <button
-            onClick={() => handleSkip(60)}
-            disabled={isIdle}
-            className="flex items-center justify-center rounded-xl px-2.5 py-1.5 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            +60s
-          </button>
-        </div>
-
-        {!credentials && isIdle && (
+      {!credentials && isIdle && (
+        <div className="text-center">
           <span className="text-xs text-yellow-600">请先登录获取凭证</span>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Collapsible stats */}
       <div>

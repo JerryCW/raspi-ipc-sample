@@ -126,7 +126,7 @@ export function WebRTCPanel({ channelName, credentials, region }: WebRTCPanelPro
   return (
     <div className="flex flex-col gap-4">
       {/* Video card — toggle button inside, hover-to-show when playing */}
-      <div className="group relative w-full overflow-hidden rounded-2xl shadow-2xl bg-gray-900 aspect-video cursor-pointer"
+      <div className="group relative w-full overflow-hidden rounded-2xl bg-gray-900 aspect-video cursor-pointer ring-2 ring-brand-500/40" style={{boxShadow: '0 4px 30px rgba(134,188,37,0.8)'}}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
       >

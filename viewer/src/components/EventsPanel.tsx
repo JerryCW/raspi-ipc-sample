@@ -100,7 +100,7 @@ export function EventsPanel({ idToken, streamName, credentials, region }: Events
   return (
     <div className="flex flex-col gap-4">
       {/* Top: Video player (full width) */}
-      <div className="relative w-full overflow-hidden rounded-2xl shadow-2xl bg-gray-900 aspect-video">
+      <div className="relative w-full overflow-hidden rounded-2xl bg-gray-900 aspect-video ring-2 ring-brand-500/40" style={{boxShadow: '0 4px 30px rgba(134,188,37,0.8)'}}>
         {isIdle ? (
           <div className="absolute inset-0 flex items-center justify-center text-gray-400">
             <div className="text-center">
@@ -135,7 +135,7 @@ export function EventsPanel({ idToken, streamName, credentials, region }: Events
             type="date"
             value={toInputDate(selectedDate)}
             onChange={handleDateChange}
-            className="rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+            className="w-40 rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
           />
         </div>
 

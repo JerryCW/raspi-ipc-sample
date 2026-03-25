@@ -5,7 +5,7 @@ import type { Fragment } from '../types';
 
 export const MIN_RANGE_MS = 60 * 1000;
 export const MAX_RANGE_MS = 7 * 24 * 60 * 60 * 1000;
-const TIMELINE_HEIGHT = 60;
+const TIMELINE_HEIGHT = 36;
 const AXIS_HEIGHT = 22;
 const SVG_HEIGHT = TIMELINE_HEIGHT + AXIS_HEIGHT;
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -110,6 +110,7 @@ interface TimelineProps {
   currentTime: Date | null;
   onTimeSelect: (time: Date) => void;
   onRangeChange: (start: Date, end: Date) => void;
+  hideDatePicker?: boolean;
 }
 
 const Timeline: React.FC<TimelineProps> = ({
@@ -119,6 +120,7 @@ const Timeline: React.FC<TimelineProps> = ({
   currentTime,
   onTimeSelect,
   onRangeChange,
+  hideDatePicker = false,
 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -253,6 +255,7 @@ const Timeline: React.FC<TimelineProps> = ({
   return (
     <div className="flex flex-col gap-2">
       {/* Date picker bar */}
+      {!hideDatePicker && (
       <div className="flex items-center gap-2 text-sm">
         <button
           onClick={goToPrevDay}
@@ -283,6 +286,7 @@ const Timeline: React.FC<TimelineProps> = ({
           </button>
         )}
       </div>
+      )}
 
       {/* SVG Timeline */}
       <div className="relative w-full select-none">

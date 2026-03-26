@@ -167,8 +167,10 @@ std::string GStreamerPipeline::build_pipeline_description(
 
     // videoconvert + videoscale ensure format compatibility
     // (libcamerasrc may output NV12/Rec709 that the encoder doesn't accept)
+    // add-borders=false: stretch to fill target resolution instead of adding
+    // black pillarbox/letterbox bars when source aspect ratio differs
     ss << " ! videoconvert"
-       << " ! videoscale"
+       << " ! videoscale add-borders=false"
        << " ! video/x-raw,width=" << config.video_preset.width
        << ",height=" << config.video_preset.height
        << ",framerate=" << config.video_preset.fps << "/1";

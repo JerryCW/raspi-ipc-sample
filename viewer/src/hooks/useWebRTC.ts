@@ -101,6 +101,7 @@ export function createRetryTracker(maxRetries: number) {
 const CONNECTION_TIMEOUT_MS = 15_000;
 const MAX_RETRIES = 3;
 const TOTAL_SESSION_TIMEOUT_MS = 60_000; // 60s total timeout — force error if still not connected
+const ICE_RECOVERY_TIMEOUT_MS = 30_000; // 30s to recover from ICE disconnected before giving up
 const CLIENT_ID = `viewer-${Date.now()}`;
 
 const INITIAL_STATS: WebRTCStats = {
@@ -154,6 +155,7 @@ export function useWebRTC(config: {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sessionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recoveryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statsIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const retryRef = useRef(createRetryTracker(MAX_RETRIES));
   const startTimeRef = useRef<number>(0);
@@ -168,6 +170,10 @@ export function useWebRTC(config: {
     if (sessionTimeoutRef.current) {
       clearTimeout(sessionTimeoutRef.current);
       sessionTimeoutRef.current = null;
+    }
+    if (recoveryTimeoutRef.current) {
+      clearTimeout(recoveryTimeoutRef.current);
+      recoveryTimeoutRef.current = null;
     }
     if (statsIntervalRef.current) {
       clearInterval(statsIntervalRef.current);
@@ -359,6 +365,12 @@ export function useWebRTC(config: {
         const mappedStatus = mapIceState(iceState);
         setStatus(mappedStatus);
 
+        // Clear any pending recovery timeout
+        if (recoveryTimeoutRef.current) {
+          clearTimeout(recoveryTimeoutRef.current);
+          recoveryTimeoutRef.current = null;
+        }
+
         if (iceState === 'connected' || iceState === 'completed') {
           // Connection established — clear timeouts, reset retries
           if (timeoutRef.current) {
@@ -372,6 +384,21 @@ export function useWebRTC(config: {
           retryRef.current.reset();
           startStatsCollection();
           onLog('WebRTC connected successfully');
+        } else if (iceState === 'disconnected') {
+          // Start recovery timeout — if ICE doesn't recover within 30s,
+          // force cleanup and show error so user can manually retry
+          onLog('ICE disconnected — waiting 30s for recovery...');
+          recoveryTimeoutRef.current = setTimeout(() => {
+            if (isStoppedRef.current) return;
+            onLog('ICE recovery timeout (30s) — connection lost');
+            cleanup();
+            setStatus('error');
+          }, ICE_RECOVERY_TIMEOUT_MS);
+        } else if (iceState === 'failed') {
+          // ICE failed — immediate cleanup
+          onLog('ICE connection failed');
+          cleanup();
+          setStatus('error');
         }
       };
 

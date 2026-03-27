@@ -317,6 +317,8 @@ const Timeline: React.FC<TimelineProps> = ({
           ref={svgRef}
           width="100%"
           height={SVG_HEIGHT}
+          viewBox={`0 0 1000 ${SVG_HEIGHT}`}
+          preserveAspectRatio="none"
           className="cursor-crosshair"
           onClick={handleClick}
           onMouseMove={handleMouseMove}
@@ -325,67 +327,71 @@ const Timeline: React.FC<TimelineProps> = ({
           onTouchEnd={handleTouchEnd}
         >
           {/* Gray background */}
-          <rect x="0" y="0" width="100%" height={TIMELINE_HEIGHT} fill="#e5e7eb" rx={4} />
+          <rect x="0" y="0" width="1000" height={TIMELINE_HEIGHT} fill="#e5e7eb" rx={4} />
 
           {/* Green recording segments */}
           {segments
             .filter((s) => s.hasRecording)
             .map((s, i) => {
-              const xPct = ((s.start - dayStart) / rangeMs) * 100;
-              const wPct = ((s.end - s.start) / rangeMs) * 100;
+              const xPos = ((s.start - dayStart) / rangeMs) * 1000;
+              const wPos = ((s.end - s.start) / rangeMs) * 1000;
               return (
-                <rect key={i} x={`${xPct}%`} y="0" width={`${wPct}%`} height={TIMELINE_HEIGHT} fill="#86BC25" opacity={0.8} rx={2} />
+                <rect key={i} x={xPos} y="0" width={wPos} height={TIMELINE_HEIGHT} fill="#86BC25" opacity={0.8} rx={2} />
               );
             })}
 
-          {/* "Now" indicator — blue triangle + dashed line */}
-          {isToday && nowPct >= 0 && nowPct <= 100 && (
+          {/* "Now" indicator — green triangle + dashed line */}
+          {isToday && nowPct >= 0 && nowPct <= 100 && (() => {
+            const nowX = (nowPct / 100) * 1000;
+            return (
             <g>
               <line
-                x1={`${nowPct}%`} y1="0"
-                x2={`${nowPct}%`} y2={TIMELINE_HEIGHT}
+                x1={nowX} y1="0"
+                x2={nowX} y2={TIMELINE_HEIGHT}
                 stroke="#86BC25" strokeWidth={1.5} strokeDasharray="4 2"
               />
               <polygon
-                points={`${nowPct}%,-1 ${nowPct - 0.6}%,8 ${nowPct + 0.6}%,8`}
+                points={`${nowX},-1 ${nowX - 6},8 ${nowX + 6},8`}
                 fill="#86BC25"
-                transform={`translate(0, 0)`}
               />
-              {/* Use absolute pixel positioning for triangle via a foreignObject workaround */}
             </g>
-          )}
+            );
+          })()}
 
-          {/* Playback position — red triangle + solid line */}
-          {playPct >= 0 && playPct <= 100 && (
+          {/* Playback position — red circle + solid line */}
+          {playPct >= 0 && playPct <= 100 && (() => {
+            const playX = (playPct / 100) * 1000;
+            return (
             <g>
               <line
-                x1={`${playPct}%`} y1="0"
-                x2={`${playPct}%`} y2={TIMELINE_HEIGHT}
+                x1={playX} y1="0"
+                x2={playX} y2={TIMELINE_HEIGHT}
                 stroke="#ef4444" strokeWidth={2}
               />
               <circle
-                cx={`${playPct}%`} cy={TIMELINE_HEIGHT / 2}
+                cx={playX} cy={TIMELINE_HEIGHT / 2}
                 r={5} fill="#ef4444" stroke="white" strokeWidth={1.5}
               />
             </g>
-          )}
+            );
+          })()}
 
           {/* Bottom axis */}
-          <line x1="0" y1={TIMELINE_HEIGHT} x2="100%" y2={TIMELINE_HEIGHT} stroke="#9ca3af" strokeWidth={1} />
+          <line x1="0" y1={TIMELINE_HEIGHT} x2="1000" y2={TIMELINE_HEIGHT} stroke="#9ca3af" strokeWidth={1} />
 
           {/* Hour tick marks */}
           {hourTicks.map((t) => {
-            const xPct = ((t - dayStart) / rangeMs) * 100;
+            const xPos = ((t - dayStart) / rangeMs) * 1000;
             const hour = Math.round((t - dayStart) / 3600_000);
             return (
               <g key={t}>
                 <line
-                  x1={`${xPct}%`} y1={TIMELINE_HEIGHT}
-                  x2={`${xPct}%`} y2={TIMELINE_HEIGHT + 5}
+                  x1={xPos} y1={TIMELINE_HEIGHT}
+                  x2={xPos} y2={TIMELINE_HEIGHT + 5}
                   stroke="#6b7280" strokeWidth={1}
                 />
                 <text
-                  x={`${xPct}%`} y={TIMELINE_HEIGHT + 17}
+                  x={xPos} y={TIMELINE_HEIGHT + 17}
                   textAnchor="middle" fontSize={10} fill="#6b7280"
                 >
                   {formatHourLabel(hour)}

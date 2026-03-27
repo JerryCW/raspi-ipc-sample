@@ -169,11 +169,14 @@ std::string GStreamerPipeline::build_pipeline_description(
     // (libcamerasrc may output NV12/Rec709 that the encoder doesn't accept)
     // add-borders=false: stretch to fill target resolution instead of adding
     // black pillarbox/letterbox bars when source aspect ratio differs
+    // pixel-aspect-ratio=1/1: force square pixels in H.264 SPS so Safari
+    // doesn't misinterpret the aspect ratio (Safari respects SAR, Chrome ignores it)
     ss << " ! videoconvert"
        << " ! videoscale add-borders=false"
        << " ! video/x-raw,width=" << config.video_preset.width
        << ",height=" << config.video_preset.height
-       << ",framerate=" << config.video_preset.fps << "/1";
+       << ",framerate=" << config.video_preset.fps << "/1"
+       << ",pixel-aspect-ratio=1/1";
 
     // Tee raw video to multiple branches — each branch encodes independently
     ss << " ! tee name=t";

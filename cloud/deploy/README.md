@@ -53,6 +53,7 @@ aws iam attach-role-policy \
 
 自定义策略包含以下权限：
 - **S3**: `GetObject`/`PutObject` — 读取截图和更新元数据（`smart-camera-captures/captures/*`）
+- **S3**: `ListBucket` — 桶级别权限，缺少时 GetObject 对不存在的 key 返回 AccessDenied 而非 404
 - **DynamoDB**: `PutItem`/`GetItem` — 写入和查询事件记录（`smart-camera-events`）
 - **SageMaker**: `InvokeEndpoint` — 调用鸟类分类端点（`bird-classifier-endpoint`）
 
@@ -65,6 +66,11 @@ cat > /tmp/cloud-verifier-policy.json << 'EOF'
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:PutObject"],
       "Resource": "arn:aws:s3:::smart-camera-captures/captures/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::smart-camera-captures"
     },
     {
       "Effect": "Allow",
@@ -135,7 +141,9 @@ aws lambda add-permission \
 
 ## 3. S3 Event Notification 配置
 
-配置 S3 桶在 `captures/` 前缀下有 `.json` 文件创建时触发 Lambda 函数。
+配置 S3 桶在 `captures/` 前缀下有 `_metadata.json` 文件创建时触发 Lambda 函数。
+
+> **注意：** 后缀必须是 `_metadata.json` 而非 `.json`，避免 Lambda 写回 `_verified.json` 时触发自身形成循环。
 
 ### 3.1 创建通知配置文件
 
@@ -149,7 +157,7 @@ cat > /tmp/s3-notification.json << 'EOF'
       "Key": {
         "FilterRules": [
           {"Name": "prefix", "Value": "captures/"},
-          {"Name": "suffix", "Value": ".json"}
+          {"Name": "suffix", "Value": "_metadata.json"}
         ]
       }
     }

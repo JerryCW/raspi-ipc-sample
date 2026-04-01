@@ -531,6 +531,11 @@ aws iam put-role-policy \
         "Effect": "Allow",
         "Action": ["s3:GetObject", "s3:PutObject"],
         "Resource": "arn:aws:s3:::smart-camera-captures/*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": ["kinesisvideo:GetDataEndpoint", "kinesisvideo:GetClip"],
+        "Resource": "*"
       }
     ]
   }'
@@ -551,7 +556,35 @@ aws iam put-role-policy \
 # taskRoleArn: arn:aws:iam::823092283330:role/raspi-camera-task-role
 ```
 
-### 5.5 资源清理
+### 5.5 Cloud Verifier Lambda 角色权限
+
+`smart-camera-cloud-verifier-role` 需要以下权限：
+
+```bash
+# S3 读写（截图下载 + 验证结果写回）
+aws iam put-role-policy \
+  --role-name smart-camera-cloud-verifier-role \
+  --policy-name cloud-verifier-s3-policy \
+  --policy-document '{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": ["s3:GetObject", "s3:PutObject"],
+        "Resource": "arn:aws:s3:::smart-camera-captures/*"
+      },
+      {
+        "Effect": "Allow",
+        "Action": "s3:ListBucket",
+        "Resource": "arn:aws:s3:::smart-camera-captures"
+      }
+    ]
+  }'
+```
+
+> 注意：`s3:ListBucket` 作用于 bucket 级别（不带 `/*`），`s3:GetObject/PutObject` 作用于对象级别（带 `/*`）。缺少 `s3:ListBucket` 会导致 GetObject 对不存在的 key 返回 AccessDenied 而非 404。
+
+### 5.6 资源清理
 
 ```bash
 # 删除 DynamoDB 表

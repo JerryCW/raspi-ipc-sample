@@ -108,28 +108,36 @@ def _process_event(
     # Derive the S3 prefix from the metadata key (same directory)
     s3_prefix = metadata_key.rsplit("/", 1)[0] + "/"
 
-    # 2. Route verification by primary_class
-    verification: dict
-    if primary_class in DIRECT_VERIFY_CLASSES:
-        # Non-bird: directly verified, no SageMaker call (req 5.4)
-        verification = {
-            "verification_status": "verified",
-            "pipeline_stage": "cloud_verified",
-            "verification_fallback": False,
-        }
-        logger.info("Direct verify for class=%s (no SageMaker needed)", primary_class)
-    elif primary_class == "bird":
+    # 2. Always try SageMaker bird classification first, regardless of primary_class.
+    # YOLO's low accuracy may misclassify birds as person/dog, so we let the
+    # cloud model decide. If SageMaker identifies a bird, we override primary_class.
+    if candidates:
         verification = verify_bird(
             s3_client, sagemaker_client, bucket, s3_prefix, candidates, metadata,
         )
+        if verification["verification_status"] == "verified" and verification.get("bird_species"):
+            # SageMaker found a bird — override primary_class
+            logger.info(
+                "SageMaker identified bird (%s) even though YOLO said primary_class=%s",
+                verification["bird_species"], primary_class,
+            )
+            metadata["primary_class"] = "bird"
+        elif verification["verification_status"] == "rejected":
+            # SageMaker says it's not a bird — fall back to YOLO's primary_class
+            verification = {
+                "verification_status": "verified",
+                "pipeline_stage": "cloud_verified",
+                "verification_fallback": False,
+            }
+            logger.info("SageMaker rejected bird, using YOLO class=%s as verified", primary_class)
     else:
-        # Unknown class — treat like non-bird, directly verify
+        # No candidate screenshots — just verify with YOLO's class
         verification = {
             "verification_status": "verified",
             "pipeline_stage": "cloud_verified",
             "verification_fallback": False,
         }
-        logger.info("Unknown class=%s, direct verify", primary_class)
+        logger.info("No candidates, direct verify for class=%s", primary_class)
 
     elapsed_ms = int((time.time() - start_time) * 1000)
     verification_status = verification["verification_status"]

@@ -283,11 +283,12 @@ class TestBirdVerificationRejected:
 
 
 class TestNonBirdDirectVerify:
-    """Non-bird classes (person, cat, dog) skip SageMaker and are directly verified."""
+    """All classes go through SageMaker first. If SageMaker doesn't find a bird,
+    the event is verified with the original YOLO class."""
 
     @pytest.mark.parametrize("cls", ["person", "cat", "dog"])
-    def test_direct_verify_classes(self, cls: str) -> None:
-        """Each DIRECT_VERIFY_CLASS is verified without SageMaker."""
+    def test_non_bird_verified_after_sagemaker_rejects(self, cls: str) -> None:
+        """SageMaker doesn't find a bird → verified with YOLO's class."""
         s3_client = MagicMock()
         sagemaker_client = MagicMock()
         table = MagicMock()
@@ -295,10 +296,19 @@ class TestNonBirdDirectVerify:
         metadata = _make_metadata(primary_class=cls)
         metadata_bytes = json.dumps(metadata).encode("utf-8")
 
-        # S3 returns metadata JSON
-        s3_client.get_object.return_value = _mock_s3_get_object(metadata_bytes)
-        # put_object for metadata update
+        # S3 returns metadata JSON, then candidate images
+        s3_client.get_object.side_effect = [
+            _mock_s3_get_object(metadata_bytes),  # metadata download
+            _mock_s3_get_object(b"fake-jpeg"),     # candidate 0
+            _mock_s3_get_object(b"fake-jpeg"),     # candidate 1
+        ]
         s3_client.put_object.return_value = {}
+
+        # SageMaker returns low confidence (not a bird)
+        sagemaker_client.invoke_endpoint.side_effect = [
+            _mock_sagemaker_response([{"species": "Unknown", "confidence": 0.1}]),
+            _mock_sagemaker_response([{"species": "Unknown", "confidence": 0.05}]),
+        ]
 
         result = _process_event(
             s3_client, sagemaker_client, table,
@@ -309,21 +319,61 @@ class TestNonBirdDirectVerify:
         )
 
         assert result["status"] == "verified"
-        # SageMaker should NOT be called for non-bird classes
-        sagemaker_client.invoke_endpoint.assert_not_called()
+        # SageMaker IS called now (for all classes)
+        assert sagemaker_client.invoke_endpoint.call_count == 2
         # DynamoDB should be written (verified event)
         table.put_item.assert_called_once()
 
-    def test_unknown_class_directly_verified(self) -> None:
-        """Unknown classes are also directly verified (same as non-bird)."""
+    def test_non_bird_overridden_when_sagemaker_finds_bird(self) -> None:
+        """YOLO says person, but SageMaker finds a bird → primary_class overridden to bird."""
+        s3_client = MagicMock()
+        sagemaker_client = MagicMock()
+        table = MagicMock()
+
+        metadata = _make_metadata(primary_class="person")
+        metadata_bytes = json.dumps(metadata).encode("utf-8")
+
+        s3_client.get_object.side_effect = [
+            _mock_s3_get_object(metadata_bytes),
+            _mock_s3_get_object(b"fake-jpeg"),
+        ]
+        s3_client.put_object.return_value = {}
+
+        sagemaker_client.invoke_endpoint.return_value = _mock_sagemaker_response([
+            {"species": "House Sparrow", "confidence": 0.85},
+        ])
+
+        result = _process_event(
+            s3_client, sagemaker_client, table,
+            bucket="b",
+            metadata_key="captures/dev/2024-01-15/123_person.json",
+            event_id="123_person",
+            start_time=1000.0,
+        )
+
+        assert result["status"] == "verified"
+        table.put_item.assert_called_once()
+
+    def test_unknown_class_verified_after_sagemaker(self) -> None:
+        """Unknown classes also go through SageMaker, then verified."""
         s3_client = MagicMock()
         sagemaker_client = MagicMock()
         table = MagicMock()
 
         metadata = _make_metadata(primary_class="raccoon")
         metadata_bytes = json.dumps(metadata).encode("utf-8")
-        s3_client.get_object.return_value = _mock_s3_get_object(metadata_bytes)
+
+        s3_client.get_object.side_effect = [
+            _mock_s3_get_object(metadata_bytes),
+            _mock_s3_get_object(b"fake-jpeg"),
+            _mock_s3_get_object(b"fake-jpeg"),
+        ]
         s3_client.put_object.return_value = {}
+
+        sagemaker_client.invoke_endpoint.side_effect = [
+            _mock_sagemaker_response([{"species": "Unknown", "confidence": 0.1}]),
+            _mock_sagemaker_response([{"species": "Unknown", "confidence": 0.05}]),
+        ]
 
         result = _process_event(
             s3_client, sagemaker_client, table,
@@ -334,7 +384,7 @@ class TestNonBirdDirectVerify:
         )
 
         assert result["status"] == "verified"
-        sagemaker_client.invoke_endpoint.assert_not_called()
+        assert sagemaker_client.invoke_endpoint.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -512,8 +562,8 @@ class TestDynamoDBIdempotentWrite:
                 s3_prefix="captures/dev/2024-01-15/",
             )
 
-    def test_rejected_event_skips_dynamodb(self) -> None:
-        """Rejected events should NOT write to DynamoDB (req 5.5)."""
+    def test_rejected_event_falls_back_to_verified(self) -> None:
+        """SageMaker rejects bird → falls back to verified with YOLO class (req 5.5 updated)."""
         s3_client = MagicMock()
         sagemaker_client = MagicMock()
         table = MagicMock()
@@ -528,7 +578,8 @@ class TestDynamoDBIdempotentWrite:
         ]
         s3_client.put_object.return_value = {}
 
-        # SageMaker returns low confidence → rejected
+        # SageMaker returns low confidence → rejected by verify_bird
+        # But _process_event falls back to verified
         sagemaker_client.invoke_endpoint.return_value = _mock_sagemaker_response([
             {"species": "Unknown", "confidence": 0.1},
         ])
@@ -541,9 +592,9 @@ class TestDynamoDBIdempotentWrite:
             start_time=1000.0,
         )
 
-        assert result["status"] == "rejected"
-        # DynamoDB should NOT be called for rejected events
-        table.put_item.assert_not_called()
+        assert result["status"] == "verified"
+        # DynamoDB IS written (fallback to verified)
+        table.put_item.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

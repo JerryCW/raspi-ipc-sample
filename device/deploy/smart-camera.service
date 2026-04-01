@@ -6,8 +6,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/smart-camera --profile production --config /etc/smart-camera/config.ini
-Restart=on-failure
-RestartSec=10s
+Restart=always
+RestartSec=5s
+StartLimitIntervalSec=300
+StartLimitBurst=5
 # WatchdogSec=30s  # TODO: enable after sd_notify("WATCHDOG=1") is implemented
 MemoryMax=512M
 CPUQuota=80%

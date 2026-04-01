@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -91,6 +92,7 @@ class ActivityDetector:
 
     def run(self) -> None:
         """Main loop: receive notification → read frame → infer → update sessions."""
+        consecutive_failures = 0
         while True:
             try:
                 notif = self.ipc.receive_notification()
@@ -105,9 +107,18 @@ class ActivityDetector:
                     frame = raw.reshape((notif.height, notif.width, 3))
 
                 self.process_frame(frame, notif.timestamp_ms)
+                consecutive_failures = 0  # reset on success
             except ConnectionError as exc:
-                logger.warning("IPC connection lost (%s), reconnecting…", exc)
+                consecutive_failures += 1
+                # Exponential backoff: 0s, 2s, 4s, 8s, 16s, 30s, 30s, ...
+                backoff = min(2 ** consecutive_failures, 30) if consecutive_failures > 1 else 0
+                logger.warning(
+                    "IPC connection lost (%s), reconnecting in %ds… (attempt %d)",
+                    exc, backoff, consecutive_failures,
+                )
                 self.ipc.close()
+                if backoff > 0:
+                    time.sleep(backoff)
                 self.connect_ipc()
             except KeyboardInterrupt:
                 logger.info("Shutting down ActivityDetector")

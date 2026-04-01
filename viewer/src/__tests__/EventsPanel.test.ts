@@ -322,3 +322,228 @@ describe('Unit: playback window calculation', () => {
     expect(window.endMs - window.startMs).toBe(10_000);
   });
 });
+
+// ===========================================================================
+// Unit Tests: EventsPanel 增强 — 鸟类品种 + 多类别图标 + 向后兼容
+// **Validates: Requirements 7.1, 7.2, 7.3, 7.4**
+// ===========================================================================
+
+/**
+ * Model the EventCard rendering logic for the enhanced fields.
+ * Mirrors the actual EventCard component logic in EventsPanel.tsx.
+ */
+function renderEnhancedCardModel(event: ActivityEvent) {
+  const icon = CLASS_ICONS[event.detectedClass] ?? '❓';
+  const isBirdWithSpecies = event.primaryClass === 'bird' && !!event.birdSpecies;
+
+  // Multi-class icons: if detectedClasses exists and has entries, show all class icons
+  let classIconsText: string;
+  if (event.detectedClasses && event.detectedClasses.length > 0) {
+    classIconsText = event.detectedClasses
+      .map((cls) => CLASS_ICONS[cls as ActivityEvent['detectedClass']] ?? '❓')
+      .join('');
+  } else {
+    classIconsText = icon;
+  }
+
+  // Display name: bird species if available, otherwise detectedClass
+  const displayName = isBirdWithSpecies ? event.birdSpecies! : event.detectedClass;
+
+  return { classIconsText, displayName, isBirdWithSpecies };
+}
+
+describe('Unit: EventsPanel enhanced card — bird species display', () => {
+  it('shows bird species name when primaryClass is bird and birdSpecies exists', () => {
+    const event: ActivityEvent = {
+      sessionId: 'bird-001',
+      eventTimestamp: '2024-06-15T10:00:00.000Z',
+      detectedClass: 'bird',
+      maxConfidence: 0.42,
+      durationSeconds: 60,
+      kvsStartTimestamp: 1700000000000,
+      kvsEndTimestamp: 1700000060000,
+      detectionCount: 10,
+      primaryClass: 'bird',
+      birdSpecies: 'House Sparrow',
+      detectedClasses: ['bird'],
+    };
+
+    const card = renderEnhancedCardModel(event);
+    expect(card.isBirdWithSpecies).toBe(true);
+    expect(card.displayName).toBe('House Sparrow');
+  });
+
+  it('does NOT show species name when birdSpecies is undefined', () => {
+    const event: ActivityEvent = {
+      sessionId: 'bird-002',
+      eventTimestamp: '2024-06-15T10:00:00.000Z',
+      detectedClass: 'bird',
+      maxConfidence: 0.35,
+      durationSeconds: 30,
+      kvsStartTimestamp: 1700000000000,
+      kvsEndTimestamp: 1700000030000,
+      detectionCount: 5,
+      primaryClass: 'bird',
+      // birdSpecies is undefined — rejected or no SageMaker match
+      detectedClasses: ['bird'],
+    };
+
+    const card = renderEnhancedCardModel(event);
+    expect(card.isBirdWithSpecies).toBe(false);
+    expect(card.displayName).toBe('bird');
+  });
+
+  it('does NOT show species name when birdSpecies is empty string', () => {
+    const event: ActivityEvent = {
+      sessionId: 'bird-003',
+      eventTimestamp: '2024-06-15T10:00:00.000Z',
+      detectedClass: 'bird',
+      maxConfidence: 0.30,
+      durationSeconds: 20,
+      kvsStartTimestamp: 1700000000000,
+      kvsEndTimestamp: 1700000020000,
+      detectionCount: 3,
+      primaryClass: 'bird',
+      birdSpecies: '',
+      detectedClasses: ['bird'],
+    };
+
+    const card = renderEnhancedCardModel(event);
+    expect(card.isBirdWithSpecies).toBe(false);
+    expect(card.displayName).toBe('bird');
+  });
+
+  it('does NOT show species name for non-bird primaryClass even if birdSpecies is set', () => {
+    const event: ActivityEvent = {
+      sessionId: 'person-001',
+      eventTimestamp: '2024-06-15T10:00:00.000Z',
+      detectedClass: 'person',
+      maxConfidence: 0.80,
+      durationSeconds: 45,
+      kvsStartTimestamp: 1700000000000,
+      kvsEndTimestamp: 1700000045000,
+      detectionCount: 8,
+      primaryClass: 'person',
+      birdSpecies: 'House Sparrow', // shouldn't matter — primaryClass is not bird
+      detectedClasses: ['person'],
+    };
+
+    const card = renderEnhancedCardModel(event);
+    expect(card.isBirdWithSpecies).toBe(false);
+    expect(card.displayName).toBe('person');
+  });
+});
+
+describe('Unit: EventsPanel enhanced card — multi-class icons', () => {
+  it('shows all class icons when detectedClasses has multiple entries', () => {
+    const event: ActivityEvent = {
+      sessionId: 'multi-001',
+      eventTimestamp: '2024-06-15T10:00:00.000Z',
+      detectedClass: 'bird',
+      maxConfidence: 0.55,
+      durationSeconds: 90,
+      kvsStartTimestamp: 1700000000000,
+      kvsEndTimestamp: 1700000090000,
+      detectionCount: 20,
+      primaryClass: 'bird',
+      birdSpecies: 'Eurasian Tree Sparrow',
+      detectedClasses: ['bird', 'person', 'cat'],
+    };
+
+    const card = renderEnhancedCardModel(event);
+    expect(card.classIconsText).toBe('🐦🧑🐱');
+  });
+
+  it('shows single class icon when detectedClasses has one entry', () => {
+    const event: ActivityEvent = {
+      sessionId: 'single-001',
+      eventTimestamp: '2024-06-15T10:00:00.000Z',
+      detectedClass: 'dog',
+      maxConfidence: 0.70,
+      durationSeconds: 40,
+      kvsStartTimestamp: 1700000000000,
+      kvsEndTimestamp: 1700000040000,
+      detectionCount: 6,
+      primaryClass: 'dog',
+      detectedClasses: ['dog'],
+    };
+
+    const card = renderEnhancedCardModel(event);
+    expect(card.classIconsText).toBe('🐕');
+  });
+
+  it('shows all four class icons for bird+person+cat+dog', () => {
+    const event: ActivityEvent = {
+      sessionId: 'all-001',
+      eventTimestamp: '2024-06-15T10:00:00.000Z',
+      detectedClass: 'bird',
+      maxConfidence: 0.60,
+      durationSeconds: 120,
+      kvsStartTimestamp: 1700000000000,
+      kvsEndTimestamp: 1700000120000,
+      detectionCount: 30,
+      primaryClass: 'bird',
+      detectedClasses: ['bird', 'person', 'cat', 'dog'],
+    };
+
+    const card = renderEnhancedCardModel(event);
+    expect(card.classIconsText).toBe('🐦🧑🐱🐕');
+  });
+});
+
+describe('Unit: EventsPanel enhanced card — backward compatibility', () => {
+  it('falls back to single detectedClass icon when detectedClasses is undefined', () => {
+    const legacyEvent: ActivityEvent = {
+      sessionId: 'legacy-001',
+      eventTimestamp: '2024-01-10T08:00:00.000Z',
+      detectedClass: 'person',
+      maxConfidence: 0.85,
+      durationSeconds: 30,
+      kvsStartTimestamp: 1700000000000,
+      kvsEndTimestamp: 1700000030000,
+      detectionCount: 5,
+      // No new fields at all — legacy event
+    };
+
+    const card = renderEnhancedCardModel(legacyEvent);
+    expect(card.classIconsText).toBe('🧑');
+    expect(card.isBirdWithSpecies).toBe(false);
+    expect(card.displayName).toBe('person');
+  });
+
+  it('falls back to single icon when detectedClasses is empty array', () => {
+    const event: ActivityEvent = {
+      sessionId: 'empty-001',
+      eventTimestamp: '2024-06-15T10:00:00.000Z',
+      detectedClass: 'cat',
+      maxConfidence: 0.65,
+      durationSeconds: 25,
+      kvsStartTimestamp: 1700000000000,
+      kvsEndTimestamp: 1700000025000,
+      detectionCount: 4,
+      detectedClasses: [],
+    };
+
+    const card = renderEnhancedCardModel(event);
+    expect(card.classIconsText).toBe('🐱');
+  });
+
+  it('legacy event without primaryClass does not show species', () => {
+    const legacyBirdEvent: ActivityEvent = {
+      sessionId: 'legacy-bird-001',
+      eventTimestamp: '2024-01-10T08:00:00.000Z',
+      detectedClass: 'bird',
+      maxConfidence: 0.40,
+      durationSeconds: 50,
+      kvsStartTimestamp: 1700000000000,
+      kvsEndTimestamp: 1700000050000,
+      detectionCount: 7,
+      // No primaryClass, no birdSpecies — old bird event
+    };
+
+    const card = renderEnhancedCardModel(legacyBirdEvent);
+    expect(card.isBirdWithSpecies).toBe(false);
+    expect(card.displayName).toBe('bird');
+    expect(card.classIconsText).toBe('🐦');
+  });
+});

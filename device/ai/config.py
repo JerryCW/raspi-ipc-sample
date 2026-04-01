@@ -36,6 +36,13 @@ class DetectorConfig:
     capture_max_size_mb: int = 200
     disk_min_free_mb: int = 100
 
+    # Candidate buffer params
+    max_candidate_frames: int = 5
+    candidate_min_interval_ms: int = 500
+
+    # Event deduplication params
+    dedup_window_sec: int = 30
+
     # S3 Uploader params
     s3_bucket: str = "smart-camera-captures"
     s3_prefix: str = "captures"

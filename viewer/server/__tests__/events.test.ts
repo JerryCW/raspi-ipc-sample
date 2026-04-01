@@ -209,3 +209,155 @@ describe('Property 19: 90 天日期范围限制', () => {
     );
   });
 });
+
+
+// ===========================================================================
+// Unit Tests: Events API 新增字段映射
+// **Validates: Requirements 6.3, 6.4**
+// ===========================================================================
+
+describe('Unit: Events API new field mapping', () => {
+  /**
+   * Simulate the mapping logic from getEvents() in events.js.
+   * We extract the pure mapping function to test it without DynamoDB.
+   */
+  function mapDynamoItemToEvent(item: Record<string, unknown>) {
+    return {
+      sessionId: item.session_id,
+      eventTimestamp: item.event_timestamp,
+      detectedClass: item.detected_class,
+      maxConfidence: item.max_confidence,
+      durationSeconds: item.duration_seconds,
+      kvsStartTimestamp: item.kvs_start_timestamp,
+      kvsEndTimestamp: item.kvs_end_timestamp,
+      detectionCount: item.detection_count,
+      verificationStatus: item.verification_status,
+      detectedClasses: item.detected_classes,
+      primaryClass: item.primary_class,
+      birdSpecies: item.bird_species,
+      speciesConfidence: item.species_confidence,
+      candidateScreenshots: item.candidate_screenshots,
+    };
+  }
+
+  it('maps all new fields correctly from DynamoDB snake_case to camelCase', () => {
+    const dynamoItem = {
+      session_id: 'abc123',
+      event_timestamp: '2024-06-15T10:30:00.000Z',
+      detected_class: 'bird',
+      max_confidence: 0.42,
+      duration_seconds: 60,
+      kvs_start_timestamp: 1700000000000,
+      kvs_end_timestamp: 1700000060000,
+      detection_count: 15,
+      verification_status: 'verified',
+      detected_classes: ['bird', 'person'],
+      primary_class: 'bird',
+      bird_species: 'House Sparrow',
+      species_confidence: 0.87,
+      candidate_screenshots: [
+        'captures/device1/2024-06-15/abc123.candidate_0.jpg',
+        'captures/device1/2024-06-15/abc123.candidate_1.jpg',
+      ],
+    };
+
+    const event = mapDynamoItemToEvent(dynamoItem);
+
+    expect(event.verificationStatus).toBe('verified');
+    expect(event.detectedClasses).toEqual(['bird', 'person']);
+    expect(event.primaryClass).toBe('bird');
+    expect(event.birdSpecies).toBe('House Sparrow');
+    expect(event.speciesConfidence).toBe(0.87);
+    expect(event.candidateScreenshots).toEqual([
+      'captures/device1/2024-06-15/abc123.candidate_0.jpg',
+      'captures/device1/2024-06-15/abc123.candidate_1.jpg',
+    ]);
+  });
+
+  it('returns undefined for missing new fields (backward compatibility)', () => {
+    const legacyItem = {
+      session_id: 'legacy-001',
+      event_timestamp: '2024-01-10T08:00:00.000Z',
+      detected_class: 'person',
+      max_confidence: 0.85,
+      duration_seconds: 30,
+      kvs_start_timestamp: 1700000000000,
+      kvs_end_timestamp: 1700000030000,
+      detection_count: 5,
+      // No new fields — simulates a legacy DynamoDB record
+    };
+
+    const event = mapDynamoItemToEvent(legacyItem);
+
+    // Legacy fields still work
+    expect(event.sessionId).toBe('legacy-001');
+    expect(event.detectedClass).toBe('person');
+    expect(event.maxConfidence).toBe(0.85);
+
+    // New fields are undefined (not null, not empty)
+    expect(event.verificationStatus).toBeUndefined();
+    expect(event.detectedClasses).toBeUndefined();
+    expect(event.primaryClass).toBeUndefined();
+    expect(event.birdSpecies).toBeUndefined();
+    expect(event.speciesConfidence).toBeUndefined();
+    expect(event.candidateScreenshots).toBeUndefined();
+  });
+
+  it('maps non-bird verified event without species fields', () => {
+    const personItem = {
+      session_id: 'person-001',
+      event_timestamp: '2024-06-15T12:00:00.000Z',
+      detected_class: 'person',
+      max_confidence: 0.75,
+      duration_seconds: 45,
+      kvs_start_timestamp: 1700000000000,
+      kvs_end_timestamp: 1700000045000,
+      detection_count: 8,
+      verification_status: 'verified',
+      detected_classes: ['person'],
+      primary_class: 'person',
+      candidate_screenshots: ['captures/device1/2024-06-15/person-001.candidate_0.jpg'],
+      // No bird_species or species_confidence for non-bird events
+    };
+
+    const event = mapDynamoItemToEvent(personItem);
+
+    expect(event.verificationStatus).toBe('verified');
+    expect(event.primaryClass).toBe('person');
+    expect(event.detectedClasses).toEqual(['person']);
+    expect(event.birdSpecies).toBeUndefined();
+    expect(event.speciesConfidence).toBeUndefined();
+  });
+
+  it('maps multi-class event with all dedup fields', () => {
+    const multiClassItem = {
+      session_id: 'multi-001',
+      event_timestamp: '2024-06-15T14:00:00.000Z',
+      detected_class: 'bird',
+      max_confidence: 0.55,
+      duration_seconds: 90,
+      kvs_start_timestamp: 1700000000000,
+      kvs_end_timestamp: 1700000090000,
+      detection_count: 20,
+      verification_status: 'verified',
+      detected_classes: ['bird', 'cat', 'dog'],
+      primary_class: 'bird',
+      bird_species: 'Eurasian Tree Sparrow',
+      species_confidence: 0.72,
+      candidate_screenshots: [
+        'captures/device1/2024-06-15/multi-001.candidate_0.jpg',
+        'captures/device1/2024-06-15/multi-001.candidate_1.jpg',
+        'captures/device1/2024-06-15/multi-001.candidate_2.jpg',
+      ],
+    };
+
+    const event = mapDynamoItemToEvent(multiClassItem);
+
+    expect(event.detectedClasses).toHaveLength(3);
+    expect(event.detectedClasses).toContain('bird');
+    expect(event.detectedClasses).toContain('cat');
+    expect(event.detectedClasses).toContain('dog');
+    expect(event.birdSpecies).toBe('Eurasian Tree Sparrow');
+    expect(event.candidateScreenshots).toHaveLength(3);
+  });
+});

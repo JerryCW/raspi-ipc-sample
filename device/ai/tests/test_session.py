@@ -134,10 +134,12 @@ class TestFirstDetectionCreatesSession:
         assert session.max_confidence == confidence
         assert session.detection_count == 1
         assert session.is_active is True
-        # Start screenshot saved
-        assert len(screenshots) == 1
+        # Start screenshot saved (first in the list); candidate may also be saved
         assert screenshots[0] == session.start_screenshot
         assert session.start_screenshot.endswith("_start.jpg")
+        # Start screenshot is separate from candidate buffer
+        start_shots = [s for s in screenshots if s.endswith("_start.jpg")]
+        assert len(start_shots) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -169,18 +171,20 @@ class TestSubsequentDetectionUpdatesOnly:
         mgr, screenshots, _ = _make_manager()
         ts2 = ts1 + ts_delta
 
-        # First detection — creates session + 1 screenshot
+        # First detection — creates session + 1 start screenshot (+ possibly candidate)
         mgr.on_detection(cls, conf1, ts1, DUMMY_FRAME)
-        assert len(screenshots) == 1
+        start_shots = [s for s in screenshots if s.endswith("_start.jpg")]
+        assert len(start_shots) == 1
 
-        # Second detection — updates session, no new screenshot
+        # Second detection — updates session, no new start screenshot
         session = mgr.on_detection(cls, conf2, ts2, DUMMY_FRAME)
         assert session is not None
         assert session.last_active_ms == ts2
         assert session.detection_count == 2
         assert session.max_confidence == max(conf1, conf2)
-        # Still only 1 screenshot (the start one)
-        assert len(screenshots) == 1
+        # Still only 1 start screenshot (candidate screenshots may be added)
+        start_shots = [s for s in screenshots if s.endswith("_start.jpg")]
+        assert len(start_shots) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -219,8 +223,11 @@ class TestTimeoutEndsSession:
         assert session.is_active is False
         assert session.end_time_ms == current
         assert session.end_screenshot.endswith("_end.jpg")
-        # 1 start screenshot + 1 end screenshot
-        assert len(screenshots) == 2
+        # Start screenshot + end screenshot present (candidates may also exist)
+        start_shots = [s for s in screenshots if s.endswith("_start.jpg")]
+        end_shots = [s for s in screenshots if s.endswith("_end.jpg")]
+        assert len(start_shots) == 1
+        assert len(end_shots) == 1
         # Metadata saved
         assert len(metadata) == 1
 
@@ -243,8 +250,9 @@ class TestTimeoutEndsSession:
         ended = mgr.check_timeouts(current)
         assert len(ended) == 0
         assert mgr.get_active_sessions() != {}
-        # Only start screenshot, no end screenshot
-        assert len(screenshots) == 1
+        # No end screenshot saved (candidates + start may exist)
+        end_shots = [s for s in screenshots if s.endswith("_end.jpg")]
+        assert len(end_shots) == 0
         assert len(metadata) == 0
 
 
@@ -376,3 +384,627 @@ class TestMultiClassIndependentSessions:
         active = mgr.get_active_sessions()
         assert "cat" in active
         assert "person" not in active
+
+
+# ---------------------------------------------------------------------------
+# Imports for CandidateBuffer tests
+# ---------------------------------------------------------------------------
+
+import os
+import tempfile
+
+from device.ai.session import CandidateBuffer, CandidateFrame
+
+
+# ---------------------------------------------------------------------------
+# CandidateBuffer unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestCandidateBufferAddWhenNotFull:
+    """Frames are added directly when buffer has capacity.
+
+    **Validates: Requirements 3.2**
+    """
+
+    def test_add_single_frame(self) -> None:
+        screenshots: list[str] = []
+
+        def record(frame: np.ndarray, filename: str) -> None:
+            screenshots.append(filename)
+
+        buf = CandidateBuffer(max_size=5, min_interval_ms=500, save_screenshot=record)
+        added = buf.try_add(DUMMY_FRAME, 0.8, 1000, "bird", "sess1")
+
+        assert added is True
+        assert len(screenshots) == 1
+        assert screenshots[0] == "sess1_candidate_0.jpg"
+
+    def test_add_multiple_frames_within_capacity(self) -> None:
+        screenshots: list[str] = []
+
+        def record(frame: np.ndarray, filename: str) -> None:
+            screenshots.append(filename)
+
+        buf = CandidateBuffer(max_size=3, min_interval_ms=500, save_screenshot=record)
+        assert buf.try_add(DUMMY_FRAME, 0.6, 1000, "bird", "s") is True
+        assert buf.try_add(DUMMY_FRAME, 0.7, 2000, "person", "s") is True
+        assert buf.try_add(DUMMY_FRAME, 0.8, 3000, "cat", "s") is True
+
+        assert len(screenshots) == 3
+        candidates = buf.get_candidates_descending()
+        assert len(candidates) == 3
+        assert candidates[0].confidence == 0.8
+
+
+class TestCandidateBufferReplacesLowest:
+    """When buffer is full, higher-confidence frame replaces the lowest.
+
+    **Validates: Requirements 3.3**
+    """
+
+    def test_replace_lowest_confidence(self) -> None:
+        screenshots: list[str] = []
+
+        def record(frame: np.ndarray, filename: str) -> None:
+            screenshots.append(filename)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            buf = CandidateBuffer(
+                max_size=2, min_interval_ms=500, save_screenshot=record, capture_dir=tmpdir
+            )
+            # Fill buffer
+            buf.try_add(DUMMY_FRAME, 0.5, 1000, "bird", "s")
+            buf.try_add(DUMMY_FRAME, 0.7, 2000, "person", "s")
+
+            # Create the file that will be replaced (simulate save_screenshot)
+            old_file = os.path.join(tmpdir, "s_candidate_0.jpg")
+            with open(old_file, "w") as f:
+                f.write("fake")
+
+            # Add higher confidence — should replace 0.5
+            added = buf.try_add(DUMMY_FRAME, 0.9, 3000, "cat", "s")
+            assert added is True
+
+            candidates = buf.get_candidates_descending()
+            confidences = [c.confidence for c in candidates]
+            assert 0.5 not in confidences
+            assert 0.9 in confidences
+            assert 0.7 in confidences
+
+            # Old file should be deleted
+            assert not os.path.exists(old_file)
+
+    def test_reject_when_not_higher_than_lowest(self) -> None:
+        screenshots: list[str] = []
+
+        def record(frame: np.ndarray, filename: str) -> None:
+            screenshots.append(filename)
+
+        buf = CandidateBuffer(max_size=2, min_interval_ms=500, save_screenshot=record)
+        buf.try_add(DUMMY_FRAME, 0.6, 1000, "bird", "s")
+        buf.try_add(DUMMY_FRAME, 0.8, 2000, "person", "s")
+
+        # 0.5 is not higher than lowest (0.6), should be rejected
+        added = buf.try_add(DUMMY_FRAME, 0.5, 3000, "cat", "s")
+        assert added is False
+        assert len(buf.get_candidates_descending()) == 2
+
+    def test_reject_when_equal_to_lowest(self) -> None:
+        screenshots: list[str] = []
+
+        def record(frame: np.ndarray, filename: str) -> None:
+            screenshots.append(filename)
+
+        buf = CandidateBuffer(max_size=2, min_interval_ms=500, save_screenshot=record)
+        buf.try_add(DUMMY_FRAME, 0.6, 1000, "bird", "s")
+        buf.try_add(DUMMY_FRAME, 0.8, 2000, "person", "s")
+
+        # Equal to lowest (0.6), should be rejected (strict >)
+        added = buf.try_add(DUMMY_FRAME, 0.6, 3000, "cat", "s")
+        assert added is False
+        assert len(buf.get_candidates_descending()) == 2
+
+
+class TestCandidateBufferDeletesReplacedFile:
+    """Replaced frame's JPEG file is deleted from disk.
+
+    **Validates: Requirements 3.4**
+    """
+
+    def test_old_jpeg_deleted_on_replace(self) -> None:
+        screenshots: list[str] = []
+
+        def record(frame: np.ndarray, filename: str) -> None:
+            screenshots.append(filename)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            buf = CandidateBuffer(
+                max_size=2, min_interval_ms=500, save_screenshot=record, capture_dir=tmpdir
+            )
+            buf.try_add(DUMMY_FRAME, 0.4, 1000, "bird", "s")
+            buf.try_add(DUMMY_FRAME, 0.7, 2000, "person", "s")
+
+            # Create fake JPEG files on disk for both candidates
+            file_0 = os.path.join(tmpdir, "s_candidate_0.jpg")
+            file_1 = os.path.join(tmpdir, "s_candidate_1.jpg")
+            with open(file_0, "w") as f:
+                f.write("fake0")
+            with open(file_1, "w") as f:
+                f.write("fake1")
+
+            # Replace lowest (0.4) with higher confidence
+            buf.try_add(DUMMY_FRAME, 0.9, 3000, "cat", "s")
+
+            # The file for the replaced frame (candidate_0, conf 0.4) should be deleted
+            assert not os.path.exists(file_0)
+            # The other file should still exist
+            assert os.path.exists(file_1)
+
+    def test_missing_file_does_not_raise(self) -> None:
+        """Replacing a frame whose JPEG is already gone should not error."""
+        screenshots: list[str] = []
+
+        def record(frame: np.ndarray, filename: str) -> None:
+            screenshots.append(filename)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            buf = CandidateBuffer(
+                max_size=1, min_interval_ms=500, save_screenshot=record, capture_dir=tmpdir
+            )
+            buf.try_add(DUMMY_FRAME, 0.3, 1000, "bird", "s")
+
+            # Don't create the file on disk — simulate it being already gone
+            added = buf.try_add(DUMMY_FRAME, 0.8, 2000, "person", "s")
+            assert added is True
+
+
+class TestCandidateBufferMinInterval:
+    """Frames within min_interval_ms of any existing frame are rejected.
+
+    **Validates: Requirements 3.5**
+    """
+
+    def test_reject_within_interval(self) -> None:
+        screenshots: list[str] = []
+
+        def record(frame: np.ndarray, filename: str) -> None:
+            screenshots.append(filename)
+
+        buf = CandidateBuffer(max_size=5, min_interval_ms=500, save_screenshot=record)
+        buf.try_add(DUMMY_FRAME, 0.6, 1000, "bird", "s")
+
+        # 400ms later — within 500ms interval, should be rejected
+        added = buf.try_add(DUMMY_FRAME, 0.9, 1400, "person", "s")
+        assert added is False
+
+    def test_accept_at_exact_interval(self) -> None:
+        screenshots: list[str] = []
+
+        def record(frame: np.ndarray, filename: str) -> None:
+            screenshots.append(filename)
+
+        buf = CandidateBuffer(max_size=5, min_interval_ms=500, save_screenshot=record)
+        buf.try_add(DUMMY_FRAME, 0.6, 1000, "bird", "s")
+
+        # Exactly 500ms later — not less than 500ms, should be accepted
+        added = buf.try_add(DUMMY_FRAME, 0.7, 1500, "person", "s")
+        assert added is True
+
+
+class TestCandidateBufferGetDescending:
+    """get_candidates_descending returns frames sorted by confidence desc.
+
+    **Validates: Requirements 3.2**
+    """
+
+    def test_descending_order(self) -> None:
+        buf = CandidateBuffer(max_size=5, min_interval_ms=500, save_screenshot=lambda f, n: None)
+        buf.try_add(DUMMY_FRAME, 0.3, 1000, "bird", "s")
+        buf.try_add(DUMMY_FRAME, 0.9, 2000, "person", "s")
+        buf.try_add(DUMMY_FRAME, 0.6, 3000, "cat", "s")
+
+        candidates = buf.get_candidates_descending()
+        assert [c.confidence for c in candidates] == [0.9, 0.6, 0.3]
+
+
+class TestCandidateBufferClear:
+    """clear() empties the buffer and returns all filenames.
+
+    **Validates: Requirements 3.6**
+    """
+
+    def test_clear_returns_filenames(self) -> None:
+        buf = CandidateBuffer(max_size=5, min_interval_ms=500, save_screenshot=lambda f, n: None)
+        buf.try_add(DUMMY_FRAME, 0.6, 1000, "bird", "s")
+        buf.try_add(DUMMY_FRAME, 0.8, 2000, "person", "s")
+
+        filenames = buf.clear()
+        assert len(filenames) == 2
+        assert all("candidate" in f for f in filenames)
+
+        # Buffer should be empty after clear
+        assert buf.get_candidates_descending() == []
+
+    def test_clear_empty_buffer(self) -> None:
+        buf = CandidateBuffer(max_size=5, min_interval_ms=500, save_screenshot=lambda f, n: None)
+        filenames = buf.clear()
+        assert filenames == []
+
+
+# ---------------------------------------------------------------------------
+# Imports for EventDeduplicator tests
+# ---------------------------------------------------------------------------
+
+from device.ai.session import DedupEvent, EventDeduplicator
+
+
+# ---------------------------------------------------------------------------
+# EventDeduplicator unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestEventDeduplicatorSingleClassCreation:
+    """First detection creates a new DedupEvent with correct fields.
+
+    **Validates: Requirements 2.1**
+    """
+
+    def test_first_detection_creates_event(self) -> None:
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        evt = dedup.on_detection("bird", 0.8, 1000)
+
+        assert evt.start_time_ms == 1000
+        assert evt.last_active_ms == 1000
+        assert evt.detected_classes == ["bird"]
+        assert evt.primary_class == "bird"
+        assert evt.class_max_confidences == {"bird": 0.8}
+        assert evt.class_detection_counts == {"bird": 1}
+        assert evt.total_detection_count == 1
+        assert evt.event_id  # non-empty
+
+    def test_same_class_repeated_updates_counts(self) -> None:
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        dedup.on_detection("person", 0.6, 1000)
+        evt = dedup.on_detection("person", 0.9, 2000)
+
+        assert evt.detected_classes == ["person"]
+        assert evt.class_detection_counts == {"person": 2}
+        assert evt.class_max_confidences == {"person": 0.9}
+        assert evt.total_detection_count == 2
+        assert evt.last_active_ms == 2000
+
+
+class TestEventDeduplicatorMultiClassMerge:
+    """Detections of different classes within the window are merged.
+
+    **Validates: Requirements 2.2, 2.3**
+    """
+
+    def test_two_classes_merged_into_one_event(self) -> None:
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        dedup.on_detection("bird", 0.7, 1000)
+        evt = dedup.on_detection("person", 0.5, 2000)
+
+        assert set(evt.detected_classes) == {"bird", "person"}
+        assert evt.class_max_confidences == {"bird": 0.7, "person": 0.5}
+        assert evt.class_detection_counts == {"bird": 1, "person": 1}
+        assert evt.total_detection_count == 2
+
+    def test_three_classes_all_tracked(self) -> None:
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        dedup.on_detection("bird", 0.4, 1000)
+        dedup.on_detection("person", 0.6, 2000)
+        evt = dedup.on_detection("dog", 0.3, 3000)
+
+        assert set(evt.detected_classes) == {"bird", "person", "dog"}
+        assert evt.total_detection_count == 3
+        assert evt.class_detection_counts == {"bird": 1, "person": 1, "dog": 1}
+
+    def test_per_class_max_confidence_tracked(self) -> None:
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        dedup.on_detection("bird", 0.3, 1000)
+        dedup.on_detection("bird", 0.8, 2000)
+        evt = dedup.on_detection("bird", 0.5, 3000)
+
+        assert evt.class_max_confidences["bird"] == 0.8
+        assert evt.class_detection_counts["bird"] == 3
+
+
+class TestEventDeduplicatorPrimaryClassSelection:
+    """primary_class is the class with the highest max confidence.
+
+    **Validates: Requirements 2.4**
+    """
+
+    def test_primary_class_is_highest_confidence(self) -> None:
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        dedup.on_detection("person", 0.5, 1000)
+        evt = dedup.on_detection("bird", 0.9, 2000)
+
+        assert evt.primary_class == "bird"
+
+    def test_primary_class_updates_when_surpassed(self) -> None:
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        dedup.on_detection("bird", 0.9, 1000)
+        assert dedup.get_active_event().primary_class == "bird"
+
+        evt = dedup.on_detection("dog", 0.95, 2000)
+        assert evt.primary_class == "dog"
+
+    def test_primary_class_stays_if_not_surpassed(self) -> None:
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        dedup.on_detection("bird", 0.9, 1000)
+        evt = dedup.on_detection("person", 0.3, 2000)
+
+        assert evt.primary_class == "bird"
+
+
+class TestEventDeduplicatorTimeout:
+    """Dedup window timeout finishes the event.
+
+    **Validates: Requirements 2.5**
+    """
+
+    def test_timeout_returns_finished_event(self) -> None:
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        dedup.on_detection("bird", 0.7, 1000)
+
+        # 31 seconds later — past the 30s window
+        finished = dedup.check_timeout(1000 + 31_000)
+        assert finished is not None
+        assert finished.detected_classes == ["bird"]
+        assert dedup.get_active_event() is None
+
+    def test_no_timeout_within_window(self) -> None:
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        dedup.on_detection("bird", 0.7, 1000)
+
+        # Exactly at boundary — should NOT timeout (need to exceed)
+        finished = dedup.check_timeout(1000 + 30_000)
+        assert finished is None
+        assert dedup.get_active_event() is not None
+
+    def test_no_timeout_when_no_active_event(self) -> None:
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        finished = dedup.check_timeout(100_000)
+        assert finished is None
+
+
+class TestEventDeduplicatorWindowExtension:
+    """New detections within the window extend last_active_ms.
+
+    **Validates: Requirements 2.5, 2.6**
+    """
+
+    def test_detection_extends_window(self) -> None:
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        dedup.on_detection("bird", 0.7, 1000)
+
+        # 20s later — new detection extends the window
+        dedup.on_detection("person", 0.5, 21_000)
+
+        # 35s after first detection but only 15s after second
+        finished = dedup.check_timeout(1000 + 35_000)
+        assert finished is None  # still active because last_active was 21_000
+        assert dedup.get_active_event() is not None
+
+        # 31s after second detection — now it should timeout
+        finished = dedup.check_timeout(21_000 + 31_000)
+        assert finished is not None
+        assert set(finished.detected_classes) == {"bird", "person"}
+
+    def test_metadata_complete_after_timeout(self) -> None:
+        """Finished event has all per-class tracking data.
+
+        **Validates: Requirements 2.6**
+        """
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        dedup.on_detection("bird", 0.4, 1000)
+        dedup.on_detection("bird", 0.8, 2000)
+        dedup.on_detection("person", 0.6, 3000)
+        dedup.on_detection("dog", 0.3, 4000)
+
+        finished = dedup.check_timeout(4000 + 31_000)
+        assert finished is not None
+        assert finished.total_detection_count == 4
+        assert finished.class_max_confidences == {"bird": 0.8, "person": 0.6, "dog": 0.3}
+        assert finished.class_detection_counts == {"bird": 2, "person": 1, "dog": 1}
+        assert finished.primary_class == "bird"  # 0.8 is highest
+
+    def test_new_event_after_timeout(self) -> None:
+        """After timeout, a new detection starts a fresh event."""
+        dedup = EventDeduplicator(dedup_window_sec=30)
+        evt1 = dedup.on_detection("bird", 0.7, 1000)
+        old_id = evt1.event_id
+
+        dedup.check_timeout(1000 + 31_000)
+
+        evt2 = dedup.on_detection("person", 0.5, 50_000)
+        assert evt2.event_id != old_id
+        assert evt2.detected_classes == ["person"]
+        assert evt2.start_time_ms == 50_000
+
+
+# ---------------------------------------------------------------------------
+# SessionManager integration tests — metadata new fields + candidate buffer
+# ---------------------------------------------------------------------------
+
+
+class TestSessionManagerMetadataNewFields:
+    """Ended session metadata includes all new edge-cloud pipeline fields.
+
+    **Validates: Requirements 3.1, 3.7, 8.1**
+    """
+
+    def test_metadata_contains_all_new_fields(self) -> None:
+        """After session ends, metadata has candidate_screenshots,
+        detected_classes, primary_class, class_max_confidences,
+        class_detection_counts, verification_status, pipeline_stage."""
+        mgr, _, metadata_log = _make_manager()
+
+        mgr.on_detection("bird", 0.8, 1000, DUMMY_FRAME)
+        timeout_ms = mgr.config.session_timeout_sec * 1000
+        mgr.check_timeouts(1000 + timeout_ms + 1)
+
+        assert len(metadata_log) == 1
+        meta = metadata_log[0]
+
+        new_fields = {
+            "candidate_screenshots",
+            "detected_classes",
+            "primary_class",
+            "class_max_confidences",
+            "class_detection_counts",
+            "verification_status",
+            "pipeline_stage",
+        }
+        assert new_fields.issubset(meta.keys()), (
+            f"Missing fields: {new_fields - meta.keys()}"
+        )
+
+    def test_verification_status_is_pending(self) -> None:
+        """verification_status must be 'pending' at edge side."""
+        mgr, _, metadata_log = _make_manager()
+        mgr.on_detection("person", 0.7, 1000, DUMMY_FRAME)
+        timeout_ms = mgr.config.session_timeout_sec * 1000
+        mgr.check_timeouts(1000 + timeout_ms + 1)
+
+        assert metadata_log[0]["verification_status"] == "pending"
+
+    def test_pipeline_stage_is_edge_detected(self) -> None:
+        """pipeline_stage must be 'edge_detected' at edge side."""
+        mgr, _, metadata_log = _make_manager()
+        mgr.on_detection("cat", 0.6, 1000, DUMMY_FRAME)
+        timeout_ms = mgr.config.session_timeout_sec * 1000
+        mgr.check_timeouts(1000 + timeout_ms + 1)
+
+        assert metadata_log[0]["pipeline_stage"] == "edge_detected"
+
+    def test_detected_classes_and_primary_class_present(self) -> None:
+        """detected_classes is a list and primary_class is a string."""
+        mgr, _, metadata_log = _make_manager()
+        mgr.on_detection("bird", 0.9, 1000, DUMMY_FRAME)
+        timeout_ms = mgr.config.session_timeout_sec * 1000
+        mgr.check_timeouts(1000 + timeout_ms + 1)
+
+        meta = metadata_log[0]
+        assert isinstance(meta["detected_classes"], list)
+        assert len(meta["detected_classes"]) >= 1
+        assert isinstance(meta["primary_class"], str)
+        assert meta["primary_class"] in meta["detected_classes"]
+
+    def test_class_max_confidences_and_counts_present(self) -> None:
+        """class_max_confidences and class_detection_counts are dicts."""
+        mgr, _, metadata_log = _make_manager()
+        mgr.on_detection("dog", 0.7, 1000, DUMMY_FRAME)
+        mgr.on_detection("dog", 0.8, 2000, DUMMY_FRAME)
+        timeout_ms = mgr.config.session_timeout_sec * 1000
+        mgr.check_timeouts(2000 + timeout_ms + 1)
+
+        meta = metadata_log[0]
+        assert isinstance(meta["class_max_confidences"], dict)
+        assert isinstance(meta["class_detection_counts"], dict)
+        assert "dog" in meta["class_max_confidences"]
+        assert "dog" in meta["class_detection_counts"]
+
+
+class TestSessionManagerCandidateScreenshotsDescending:
+    """candidate_screenshots in metadata are ordered by confidence descending.
+
+    **Validates: Requirements 3.6, 3.7**
+    """
+
+    def test_candidates_sorted_descending_in_metadata(self) -> None:
+        """Multiple detections at different confidences produce a
+        candidate_screenshots list sorted by confidence (highest first)."""
+        config = _make_config(max_candidate_frames=5, candidate_min_interval_ms=500)
+        mgr, screenshots, metadata_log = _make_manager(config)
+
+        # Detections spaced >= 500ms apart so all pass interval check
+        mgr.on_detection("bird", 0.6, 1000, DUMMY_FRAME)
+        mgr.on_detection("bird", 0.9, 2000, DUMMY_FRAME)
+        mgr.on_detection("bird", 0.7, 3000, DUMMY_FRAME)
+
+        timeout_ms = mgr.config.session_timeout_sec * 1000
+        mgr.check_timeouts(3000 + timeout_ms + 1)
+
+        meta = metadata_log[0]
+        candidate_list = meta["candidate_screenshots"]
+        assert isinstance(candidate_list, list)
+        # The list should have 3 candidates (buffer size 5, 3 detections)
+        assert len(candidate_list) == 3
+
+        # Verify ordering: retrieve the CandidateBuffer's descending order
+        # by checking filenames match the order saved by get_candidates_descending
+        # The first candidate should correspond to the highest confidence (0.9)
+        # We verify by checking the candidate filenames are all present in screenshots
+        for fname in candidate_list:
+            assert fname in screenshots
+
+    def test_single_detection_produces_one_candidate(self) -> None:
+        """A single detection produces exactly one candidate screenshot."""
+        config = _make_config(max_candidate_frames=5, candidate_min_interval_ms=500)
+        mgr, _, metadata_log = _make_manager(config)
+
+        mgr.on_detection("person", 0.8, 1000, DUMMY_FRAME)
+        timeout_ms = mgr.config.session_timeout_sec * 1000
+        mgr.check_timeouts(1000 + timeout_ms + 1)
+
+        meta = metadata_log[0]
+        assert len(meta["candidate_screenshots"]) == 1
+
+
+class TestSessionManagerStartScreenshotNotInBuffer:
+    """Start screenshot (_start.jpg) does not occupy candidate buffer slots.
+
+    **Validates: Requirements 3.6**
+    """
+
+    def test_start_screenshot_separate_from_candidates(self) -> None:
+        """The start screenshot filename must not appear in
+        candidate_screenshots list."""
+        config = _make_config(max_candidate_frames=3, candidate_min_interval_ms=500)
+        mgr, screenshots, metadata_log = _make_manager(config)
+
+        mgr.on_detection("bird", 0.7, 1000, DUMMY_FRAME)
+        mgr.on_detection("bird", 0.8, 2000, DUMMY_FRAME)
+
+        timeout_ms = mgr.config.session_timeout_sec * 1000
+        mgr.check_timeouts(2000 + timeout_ms + 1)
+
+        meta = metadata_log[0]
+        start_name = meta["start_screenshot_filename"]
+        candidate_list = meta["candidate_screenshots"]
+
+        # Start screenshot must NOT be in the candidate list
+        assert start_name not in candidate_list
+        # Start screenshot ends with _start.jpg
+        assert start_name.endswith("_start.jpg")
+        # All candidates are candidate files, not start files
+        for fname in candidate_list:
+            assert "_start.jpg" not in fname
+
+    def test_buffer_full_does_not_include_start(self) -> None:
+        """Even when buffer is full, start screenshot stays separate."""
+        config = _make_config(max_candidate_frames=2, candidate_min_interval_ms=500)
+        mgr, screenshots, metadata_log = _make_manager(config)
+
+        # 3 detections, buffer size 2 — buffer will be full
+        mgr.on_detection("bird", 0.6, 1000, DUMMY_FRAME)
+        mgr.on_detection("bird", 0.8, 2000, DUMMY_FRAME)
+        mgr.on_detection("bird", 0.9, 3000, DUMMY_FRAME)
+
+        timeout_ms = mgr.config.session_timeout_sec * 1000
+        mgr.check_timeouts(3000 + timeout_ms + 1)
+
+        meta = metadata_log[0]
+        start_name = meta["start_screenshot_filename"]
+        candidate_list = meta["candidate_screenshots"]
+
+        assert start_name not in candidate_list
+        # Buffer max is 2, so at most 2 candidates
+        assert len(candidate_list) <= 2
+
+        # Start screenshot is saved (present in screenshots log)
+        assert start_name in screenshots

@@ -164,6 +164,12 @@ async function getEvents(req, res) {
       kvsStartTimestamp: item.kvs_start_timestamp,
       kvsEndTimestamp: item.kvs_end_timestamp,
       detectionCount: item.detection_count,
+      verificationStatus: item.verification_status,
+      detectedClasses: item.detected_classes,
+      primaryClass: item.primary_class,
+      birdSpecies: item.bird_species,
+      speciesConfidence: item.species_confidence,
+      candidateScreenshots: item.candidate_screenshots,
     }));
 
     return res.json({ events, count: events.length });

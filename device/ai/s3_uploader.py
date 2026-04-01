@@ -1,21 +1,24 @@
-"""S3 Uploader — monitors Capture Directory and uploads events to S3 / DynamoDB.
+"""S3 Uploader — monitors Capture Directory and uploads events to S3.
 
 Runs as an independent Python process. Polls the capture directory for
-matched JPEG + JSON file pairs, uploads them atomically to S3, writes
-an event record to DynamoDB, and deletes the local files on success.
+matched screenshot + JSON file sets, uploads them atomically to S3,
+and deletes the local files on success.
 
-Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 4.1, 4.2, 4.3, 7.2, 7.3
+DynamoDB writes are handled by the Cloud_Verifier Lambda (triggered by
+S3 Event Notification on metadata.json upload).
+
+Requirements: 3.1, 3.7, 3.8, 3.9
 """
 
 from __future__ import annotations
 
+import glob
 import json
 import logging
 import os
 import shutil
 import time
 from datetime import datetime, timezone
-from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -28,12 +31,11 @@ logger = logging.getLogger(__name__)
 _RETRY_EXHAUSTED = object()
 
 
-def _to_decimal(value: float) -> Decimal:
-    return Decimal(str(value))
-
-
 class S3Uploader:
-    """Monitors Capture Directory, uploads to S3, writes DynamoDB."""
+    """Monitors Capture Directory, uploads to S3.
+
+    DynamoDB writes are handled by Cloud_Verifier Lambda, not by this uploader.
+    """
 
     def __init__(
         self,
@@ -41,38 +43,40 @@ class S3Uploader:
         device_id: str = "",
         *,
         s3_client: Any = None,
-        dynamodb_resource: Any = None,
         poll_interval: float = 5.0,
     ) -> None:
         self.config = config
         self.device_id = device_id or os.environ.get("DEVICE_ID", "unknown")
         self.poll_interval = poll_interval
         self.s3 = s3_client or boto3.client("s3")
-        ddb = dynamodb_resource or boto3.resource("dynamodb")
-        self.table = ddb.Table(self.config.dynamodb_table)
         self.capture_dir = Path(self.config.capture_dir)
         self.errors_dir = self.capture_dir / "errors"
 
     def run(self) -> None:
-        """Main loop: scan -> upload -> write DDB -> delete local files."""
+        """Main loop: scan -> upload -> delete local files."""
         logger.info(
             "S3Uploader started bucket=%s prefix=%s device=%s",
             self.config.s3_bucket, self.config.s3_prefix, self.device_id,
         )
         while True:
             try:
-                pairs = self.scan_file_pairs()
-                for jpeg_path, json_path in pairs:
-                    self.upload_event(str(jpeg_path), str(json_path))
+                event_sets = self.scan_file_pairs()
+                for start_jpg, json_path in event_sets:
+                    self.upload_event(str(start_jpg), str(json_path))
                 time.sleep(self.poll_interval)
             except KeyboardInterrupt:
                 logger.info("Shutting down S3Uploader")
                 break
 
     def scan_file_pairs(self) -> List[Tuple[Path, Path]]:
-        """Scan capture directory for matched JPEG + JSON file pairs.
+        """Scan capture directory for uploadable event file sets.
 
-        Returns pairs sorted by file creation time oldest-first (req 7.3).
+        An event is ready when its metadata JSON and start screenshot exist.
+        Candidate screenshots ({session_id}_candidate_*.jpg) are discovered
+        at upload time from the metadata. The old format (start+end) is also
+        supported: if _end.jpg exists it will be included in the upload.
+
+        Returns (start_jpg, json_path) tuples sorted oldest-first (req 7.3).
         """
         if not self.capture_dir.exists():
             return []
@@ -83,62 +87,114 @@ class S3Uploader:
                 session_id = f.name.replace("_metadata.json", "")
                 json_files[session_id] = f
 
-        triplets: List[Tuple[str, Path, float]] = []
+        entries: List[Tuple[str, Path, float]] = []
         for session_id, json_path in json_files.items():
             start_jpg = self.capture_dir / f"{session_id}_start.jpg"
+            if not start_jpg.exists():
+                continue
+
+            # New format: start.jpg + candidate_*.jpg + metadata.json
+            # Old format: start.jpg + end.jpg + metadata.json
+            # Accept either: candidates present OR end.jpg present
+            candidate_pattern = str(
+                self.capture_dir / f"{session_id}_candidate_*.jpg"
+            )
+            candidates = glob.glob(candidate_pattern)
             end_jpg = self.capture_dir / f"{session_id}_end.jpg"
-            if start_jpg.exists() and end_jpg.exists():
+
+            if candidates or end_jpg.exists():
                 try:
                     ctime = json_path.stat().st_ctime
                 except OSError:
                     ctime = 0.0
-                triplets.append((session_id, json_path, ctime))
+                entries.append((session_id, json_path, ctime))
 
-        triplets.sort(key=lambda t: t[2])
+        entries.sort(key=lambda t: t[2])
 
         result: List[Tuple[Path, Path]] = []
-        for session_id, json_path, _ in triplets:
+        for session_id, json_path, _ in entries:
             start_jpg = self.capture_dir / f"{session_id}_start.jpg"
             result.append((start_jpg, json_path))
         return result
 
     def upload_event(self, jpeg_path: str, json_path: str) -> None:
-        """Atomically upload event files to S3, write DDB, then delete locals.
+        """Atomically upload event files to S3, then delete locals.
+
+        Supports both new format (start + candidate_*.jpg + metadata.json)
+        and old format (start + end + metadata.json).
 
         All files must upload successfully before any local file is deleted (req 3.7).
+        On retry exhaustion, all local files are moved to errors/ (req 3.9).
+
+        DynamoDB writes are handled by Cloud_Verifier Lambda, not here.
         """
         json_p = Path(json_path)
         session_id = json_p.name.replace("_metadata.json", "")
         start_jpg_p = Path(jpeg_path)
-        end_jpg_p = start_jpg_p.parent / f"{session_id}_end.jpg"
+        capture_dir = start_jpg_p.parent
 
         try:
             with open(json_path, "r") as f:
                 metadata = json.load(f)
         except (OSError, json.JSONDecodeError) as exc:
             logger.error("Failed to read metadata %s: %s", json_path, exc)
-            self._move_to_errors(start_jpg_p, end_jpg_p, json_p)
+            self._move_to_errors(start_jpg_p, json_p)
             return
 
         detected_class = metadata.get("detected_class", "unknown")
         kvs_start_ts = metadata.get("kvs_start_timestamp", 0)
 
+        # Collect all local files belonging to this event
+        local_files: List[Path] = [start_jpg_p]
+
+        # Discover candidate screenshots from disk
+        candidate_pattern = str(capture_dir / f"{session_id}_candidate_*.jpg")
+        candidate_paths = sorted(glob.glob(candidate_pattern))
+        for cp in candidate_paths:
+            local_files.append(Path(cp))
+
+        # Support old format: include end.jpg if present
+        end_jpg_p = capture_dir / f"{session_id}_end.jpg"
+        if end_jpg_p.exists():
+            local_files.append(end_jpg_p)
+
+        local_files.append(json_p)
+
+        # Build S3 keys for each file
+        files_to_upload: List[Tuple[str, str]] = []
+
+        # start.jpg
         s3_start_key = self.build_s3_key(
             self.device_id, kvs_start_ts, detected_class, "start.jpg"
         )
-        s3_end_key = self.build_s3_key(
-            self.device_id, kvs_start_ts, detected_class, "end.jpg"
-        )
+        files_to_upload.append((str(start_jpg_p), s3_start_key))
+
+        # candidate_N.jpg — extract index from filename
+        for cp in candidate_paths:
+            cp_path = Path(cp)
+            # filename: {session_id}_candidate_N.jpg -> ext: candidate_N.jpg
+            suffix = cp_path.name.replace(f"{session_id}_", "")  # candidate_N.jpg
+            ext = suffix.replace(".jpg", "")  # candidate_N
+            # Normalise to dotted form for S3 key: candidate_0.jpg
+            s3_key = self.build_s3_key(
+                self.device_id, kvs_start_ts, detected_class, f"{ext}.jpg"
+            )
+            files_to_upload.append((str(cp_path), s3_key))
+
+        # end.jpg (old format backward compat)
+        if end_jpg_p.exists():
+            s3_end_key = self.build_s3_key(
+                self.device_id, kvs_start_ts, detected_class, "end.jpg"
+            )
+            files_to_upload.append((str(end_jpg_p), s3_end_key))
+
+        # metadata.json
         s3_json_key = self.build_s3_key(
             self.device_id, kvs_start_ts, detected_class, "json"
         )
+        files_to_upload.append((str(json_p), s3_json_key))
 
-        files_to_upload = [
-            (str(start_jpg_p), s3_start_key),
-            (str(end_jpg_p), s3_end_key),
-            (str(json_p), s3_json_key),
-        ]
-
+        # Upload all files with retry
         for local_path, s3_key in files_to_upload:
             result = self.retry_with_backoff(
                 lambda lp=local_path, sk=s3_key: self._upload_file(lp, sk)
@@ -147,32 +203,19 @@ class S3Uploader:
                 logger.error(
                     "Upload failed after retries: %s -> %s", local_path, s3_key
                 )
-                self._move_to_errors(start_jpg_p, end_jpg_p, json_p)
+                self._move_to_errors(*local_files)
                 return
 
-        s3_paths = {
-            "s3_start_jpeg_path": s3_start_key,
-            "s3_end_jpeg_path": s3_end_key,
-            "s3_metadata_path": s3_json_key,
-        }
-        ddb_result = self.retry_with_backoff(
-            lambda: self.write_dynamodb_record(metadata, s3_paths)
-        )
-        if ddb_result is _RETRY_EXHAUSTED:
-            logger.error(
-                "DynamoDB write failed after retries for session %s", session_id
-            )
-            self._move_to_errors(start_jpg_p, end_jpg_p, json_p)
-            return
-
-        for p in (start_jpg_p, end_jpg_p, json_p):
+        # All uploads succeeded — delete local files
+        for p in local_files:
             try:
                 p.unlink(missing_ok=True)
             except OSError as exc:
                 logger.warning("Failed to delete local file %s: %s", p, exc)
 
         logger.info(
-            "Event uploaded: session=%s class=%s", session_id, detected_class
+            "Event uploaded: session=%s class=%s files=%d",
+            session_id, detected_class, len(files_to_upload),
         )
 
     @staticmethod
@@ -183,40 +226,6 @@ class S3Uploader:
         dt = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
         date_str = dt.strftime("%Y-%m-%d")
         return f"captures/{device_id}/{date_str}/{timestamp_ms}_{cls}.{ext}"
-
-    def write_dynamodb_record(self, metadata: dict, s3_paths: dict) -> None:
-        """Write activity event record to DynamoDB.
-
-        PK=device_id, SK=event_timestamp (ISO 8601).
-        expiry_ttl = event_timestamp_unix + event_ttl_days * 86400.
-        """
-        kvs_start_ts = metadata.get("kvs_start_timestamp", 0)
-        event_dt = datetime.fromtimestamp(
-            kvs_start_ts / 1000.0, tz=timezone.utc
-        )
-        event_iso = event_dt.isoformat()
-        event_unix_sec = int(kvs_start_ts / 1000)
-        ttl_seconds = self.config.event_ttl_days * 24 * 3600
-        expiry_ttl = event_unix_sec + ttl_seconds
-
-        item = {
-            "device_id": self.device_id,
-            "event_timestamp": event_iso,
-            "session_id": metadata.get("session_id", ""),
-            "detected_class": metadata.get("detected_class", ""),
-            "max_confidence": _to_decimal(
-                metadata.get("max_confidence", 0.0)
-            ),
-            "duration_seconds": _to_decimal(
-                metadata.get("duration_seconds", 0.0)
-            ),
-            "kvs_start_timestamp": kvs_start_ts,
-            "kvs_end_timestamp": metadata.get("kvs_end_timestamp", 0),
-            "detection_count": metadata.get("detection_count", 0),
-            "expiry_ttl": expiry_ttl,
-        }
-        item.update(s3_paths)
-        self.table.put_item(Item=item)
 
     def retry_with_backoff(
         self,
@@ -286,14 +295,12 @@ def main() -> None:
 
     # Try IoT credential provider first, fall back to default boto3 chain
     s3_client = None
-    dynamodb_resource = None
     try:
         from device.ai.iot_credential_provider import load_iot_config, create_iot_boto3_session
         iot_config = load_iot_config(config_path)
         if iot_config.credential_endpoint and iot_config.cert_path:
             session = create_iot_boto3_session(iot_config)
             s3_client = session.client("s3")
-            dynamodb_resource = session.resource("dynamodb")
             logger.info("Using IoT credential provider for AWS access")
     except Exception as exc:
         logger.warning("IoT credential provider failed, falling back to default: %s", exc)
@@ -301,7 +308,6 @@ def main() -> None:
     uploader = S3Uploader(
         config, device_id=device_id,
         s3_client=s3_client,
-        dynamodb_resource=dynamodb_resource,
     )
     uploader.run()
 

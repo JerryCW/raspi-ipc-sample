@@ -213,6 +213,7 @@ function EventCard({ event, idToken, isActive, onClick }: EventCardProps) {
   }, [event, onClick]);
 
   const icon = CLASS_ICONS[event.detectedClass] ?? '❓';
+  const isBirdWithSpecies = event.primaryClass === 'bird' && !!event.birdSpecies;
 
   return (
     <button
@@ -240,9 +241,15 @@ function EventCard({ event, idToken, isActive, onClick }: EventCardProps) {
       {/* Info */}
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex items-center gap-1.5">
-          <span className="text-base">{icon}</span>
+          {event.detectedClasses && event.detectedClasses.length > 0 ? (
+            <span className="text-base">
+              {event.detectedClasses.map((cls) => CLASS_ICONS[cls as ActivityEvent['detectedClass']] ?? '❓').join('')}
+            </span>
+          ) : (
+            <span className="text-base">{icon}</span>
+          )}
           <span className="text-sm font-medium text-gray-900">
-            {event.detectedClass}
+            {isBirdWithSpecies ? event.birdSpecies : event.detectedClass}
           </span>
           <span className="ml-auto text-xs text-gray-400">
             {event.detectionCount}次检测

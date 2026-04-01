@@ -114,4 +114,10 @@ export interface ActivityEvent {
   kvsEndTimestamp: number;
   detectionCount: number;
   thumbnailUrl?: string;
+  verificationStatus?: 'verified' | 'rejected';
+  detectedClasses?: string[];
+  primaryClass?: string;
+  birdSpecies?: string;
+  speciesConfidence?: number;
+  candidateScreenshots?: string[];
 }

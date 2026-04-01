@@ -96,6 +96,13 @@ def _process_event(
     """Core processing: download metadata → verify → write DynamoDB → update S3."""
     # 1. Download and parse metadata.json
     metadata = _download_metadata(s3_client, bucket, metadata_key)
+
+    # Early exit: if metadata already has verification_status, this is a
+    # re-trigger caused by our own put_object writing back to the same key.
+    if "verification_status" in metadata:
+        logger.info("Already verified (re-trigger), skipping: %s", event_id)
+        return {"status": "skipped", "event_id": event_id, "reason": "already_verified"}
+
     session_id = metadata.get("session_id", event_id)
     primary_class = metadata.get("primary_class", metadata.get("detected_class", "unknown"))
     candidates = metadata.get("candidate_screenshots", [])

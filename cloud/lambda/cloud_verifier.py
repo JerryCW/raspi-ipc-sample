@@ -56,7 +56,7 @@ def lambda_handler(event: dict, context: Any) -> dict:
         raw_key = s3_info.get("object", {}).get("key", "")
         key = urllib.parse.unquote_plus(raw_key)
 
-        if not key.endswith(".json") or not key.startswith("captures/"):
+        if not key.endswith("_metadata.json") or not key.startswith("captures/"):
             logger.info("Skipping non-metadata object: %s", key)
             continue
 
@@ -77,11 +77,14 @@ def lambda_handler(event: dict, context: Any) -> dict:
 def _extract_event_id(key: str) -> str:
     """Extract a human-readable event ID from the S3 key.
 
-    Key format: captures/{device_id}/{date}/{timestamp}_{class}.json
+    Key format: captures/{device_id}/{date}/{timestamp}_{class}_metadata.json
     Returns: {timestamp}_{class}
     """
     filename = key.rsplit("/", 1)[-1]
-    return filename.rsplit(".", 1)[0]  # strip .json
+    # Strip _metadata.json or .json suffix
+    if filename.endswith("_metadata.json"):
+        return filename[: -len("_metadata.json")]
+    return filename.rsplit(".", 1)[0]  # fallback: strip .json
 
 
 def _process_event(
@@ -390,13 +393,17 @@ def _update_s3_metadata(
     if verification.get("verification_fallback"):
         metadata["verification_fallback"] = True
 
+    # Write to a separate _verified.json key to avoid re-triggering this Lambda.
+    # The trigger suffix filter is _metadata.json, so _verified.json won't match.
+    verified_key = key.replace("_metadata.json", "_verified.json") if "_metadata.json" in key else key.replace(".json", "_verified.json")
+
     s3_client.put_object(
         Bucket=bucket,
-        Key=key,
+        Key=verified_key,
         Body=json.dumps(metadata, ensure_ascii=False, indent=2).encode("utf-8"),
         ContentType="application/json",
     )
-    logger.info("S3 metadata updated: %s", key)
+    logger.info("S3 metadata updated: %s", verified_key)
 
 
 def _to_decimal(value: Any) -> Any:

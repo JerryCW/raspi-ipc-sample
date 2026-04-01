@@ -188,10 +188,10 @@ class S3Uploader:
             )
             files_to_upload.append((str(end_jpg_p), s3_end_key))
 
-        # metadata.json
-        s3_json_key = self.build_s3_key(
-            self.device_id, kvs_start_ts, detected_class, "json"
-        )
+        # metadata.json — use _metadata.json suffix to match S3 trigger filter
+        dt = datetime.fromtimestamp(kvs_start_ts / 1000.0, tz=timezone.utc)
+        date_str = dt.strftime("%Y-%m-%d")
+        s3_json_key = f"captures/{self.device_id}/{date_str}/{kvs_start_ts}_{detected_class}_metadata.json"
         files_to_upload.append((str(json_p), s3_json_key))
 
         # Upload all files with retry

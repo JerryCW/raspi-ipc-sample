@@ -664,7 +664,7 @@ describe('Unit: Download button does not affect HLS playback (stopPropagation mo
 
   it('card always renders download button for any event', () => {
     fc.assert(
-      fc.property(arbActivityEvent, (event) => {
+      fc.property(arbActivityEvent, (_event) => {
         // Model: every event card should have a download button
         // The download button is always present regardless of event data
         const hasDownloadButton = true; // Always rendered in EventCard

@@ -42,6 +42,7 @@ COPY --from=build /app/dist ./dist/
 
 ENV PORT=3000
 ENV AWS_REGION=ap-southeast-1
+ENV KVS_STREAM_NAME=raspi_camera_stream
 
 EXPOSE 3000
 

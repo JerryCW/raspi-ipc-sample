@@ -2,6 +2,15 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import {
+  KinesisVideoClient,
+  GetDataEndpointCommand,
+} from '@aws-sdk/client-kinesis-video';
+import {
+  KinesisVideoArchivedMediaClient,
+  GetClipCommand,
+  ClipFragmentSelectorType,
+} from '@aws-sdk/client-kinesis-video-archived-media';
 import jwt from 'jsonwebtoken';
 import jwksClient from 'jwks-rsa';
 
@@ -14,6 +23,10 @@ const userPoolId = process.env.COGNITO_USER_POOL_ID || '';
 const tableName = process.env.DYNAMODB_TABLE || 'smart-camera-events';
 const s3Bucket = process.env.S3_BUCKET || 'smart-camera-captures';
 const deviceId = process.env.DEVICE_ID || '';
+
+const MAX_CLIP_DURATION_SEC = 300;
+const CLIP_BUFFER_SEC = 5;
+const kvsStreamName = process.env.KVS_STREAM_NAME || '';
 
 const cognitoIssuer = `https://cognito-idp.${region}.amazonaws.com/${userPoolId}`;
 const jwksUri = `${cognitoIssuer}/.well-known/jwks.json`;
@@ -234,6 +247,127 @@ async function getThumbnail(req, res) {
 }
 
 // ---------------------------------------------------------------------------
+// Pure helpers for video clip export
+// ---------------------------------------------------------------------------
+
+function computeClipRange(kvsStart, kvsEnd) {
+  const clipStart = new Date(kvsStart - CLIP_BUFFER_SEC * 1000);
+  let clipEnd = new Date(kvsEnd + CLIP_BUFFER_SEC * 1000);
+  if (clipEnd.getTime() - clipStart.getTime() > MAX_CLIP_DURATION_SEC * 1000) {
+    clipEnd = new Date(clipStart.getTime() + MAX_CLIP_DURATION_SEC * 1000);
+  }
+  return { clipStart, clipEnd };
+}
+
+function generateClipFilename(detectedClass, kvsStartTimestamp) {
+  const dateStr = new Date(kvsStartTimestamp)
+    .toISOString()
+    .replace(/[:.]/g, '-')
+    .slice(0, 19);
+  return `${detectedClass}_${dateStr}.mkv`;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/events/:sessionId/clip
+// ---------------------------------------------------------------------------
+
+async function getVideoClip(req, res) {
+  const { sessionId } = req.params;
+
+  if (!sessionId || typeof sessionId !== 'string' || !sessionId.trim()) {
+    return res.status(400).json({ error: 'Invalid sessionId' });
+  }
+
+  try {
+    const result = await getDocClient().send(
+      new QueryCommand({
+        TableName: tableName,
+        KeyConditionExpression: 'device_id = :deviceId',
+        FilterExpression: 'session_id = :sessionId',
+        ExpressionAttributeValues: {
+          ':deviceId': deviceId,
+          ':sessionId': sessionId,
+        },
+      })
+    );
+
+    const items = result.Items || [];
+    if (items.length === 0) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+
+    const item = items[0];
+    const kvsStart = item.kvs_start_timestamp;
+    const kvsEnd = item.kvs_end_timestamp;
+
+    if (!kvsStart || !kvsEnd) {
+      return res.status(404).json({ error: 'Event has no video timestamps' });
+    }
+
+    const { clipStart, clipEnd } = computeClipRange(kvsStart, kvsEnd);
+
+    const kvsClient = new KinesisVideoClient({ region });
+    const endpointResp = await kvsClient.send(
+      new GetDataEndpointCommand({
+        StreamName: kvsStreamName,
+        APIName: 'GET_CLIP',
+      })
+    );
+    const dataEndpoint = endpointResp.DataEndpoint;
+    if (!dataEndpoint) {
+      return res.status(500).json({ error: 'Failed to get KVS data endpoint' });
+    }
+
+    const archivedClient = new KinesisVideoArchivedMediaClient({
+      region,
+      endpoint: dataEndpoint,
+    });
+    const clipResp = await archivedClient.send(
+      new GetClipCommand({
+        StreamName: kvsStreamName,
+        ClipFragmentSelector: {
+          FragmentSelectorType: ClipFragmentSelectorType.SERVER_TIMESTAMP,
+          TimestampRange: {
+            StartTimestamp: clipStart,
+            EndTimestamp: clipEnd,
+          },
+        },
+      })
+    );
+
+    if (!clipResp.Payload) {
+      return res.status(404).json({ error: 'No video available for this time range' });
+    }
+
+    const filename = generateClipFilename(
+      item.detected_class || 'event',
+      kvsStart
+    );
+    res.setHeader('Content-Type', 'video/x-matroska');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    const stream = clipResp.Payload;
+    stream.pipe(res);
+
+    stream.on('end', () => {
+      console.log(
+        `Video clip exported: sessionId=${sessionId}, range=${clipStart.toISOString()}~${clipEnd.toISOString()}`
+      );
+    });
+
+    stream.on('error', (err) => {
+      console.error(`Stream error during clip export: sessionId=${sessionId}`, err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Stream error during video export' });
+      }
+    });
+  } catch (err) {
+    console.error(`Video clip export failed: sessionId=${sessionId}`, err);
+    return res.status(500).json({ error: 'Failed to export video clip' });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Exports for testing and registration
 // ---------------------------------------------------------------------------
 
@@ -241,6 +375,9 @@ export {
   verifyJwt,
   getEvents,
   getThumbnail,
+  getVideoClip,
   isValidDateFormat,
   isWithin90Days,
+  computeClipRange,
+  generateClipFilename,
 };

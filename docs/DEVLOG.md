@@ -1717,3 +1717,109 @@ _暂无。_
 **涉及的文件/组件：** `device/ai/config.py`、`device/ai/session.py`、`device/ai/s3_uploader.py`、`cloud/sagemaker/inference.py`、`cloud/sagemaker/deploy_model.py`、`cloud/lambda/cloud_verifier.py`、`cloud/deploy/README.md`、`viewer/src/types/index.ts`、`viewer/server/events.js`、`viewer/src/components/EventsPanel.tsx`
 
 ---
+
+### 2026-04-01 — 任务: event-video-export 1.1 在 events.js 中新增 getVideoClip 异步处理函数
+
+**概要：** 在 `viewer/server/events.js` 中新增 KVS 视频导出功能：KVS SDK 导入、`computeClipRange` 纯函数（时间范围缓冲+300s上限）、`generateClipFilename` 纯函数（文件名格式化）、`getVideoClip` 异步处理函数（DynamoDB 查询→KVS GetClip→流式返回 MKV）。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。KVS SDK 依赖已在 package.json 中存在。
+
+**经验教训：** 将时间范围计算和文件名生成提取为纯函数导出，方便属性测试直接验证，无需 mock HTTP 请求。
+
+**涉及的文件/组件：** `viewer/server/events.js`
+
+---
+
+### 2026-04-01 — 任务: event-video-export 1.2 在 index.js 中注册视频导出路由
+
+**概要：** 在 `viewer/server/index.js` 中导入 `getVideoClip` 并注册 `GET /api/events/:sessionId/clip` 路由，使用 `verifyJwt` 中间件。
+
+**遇到的问题：**
+- 顺利完成，路由已在之前的子代理执行中被正确添加。
+
+**经验教训：** 路由注册顺序很重要，新路由必须在 catch-all `/api/{*splat}` 之前。
+
+**涉及的文件/组件：** `viewer/server/index.js`
+
+---
+
+
+### [2026-03-23] — 任务: 1.3-1.7 视频导出属性测试与单元测试
+
+**概要：** 在 `viewer/server/__tests__/events.test.ts` 中新增 5 个测试块：Property 1（时间范围缓冲计算）、Property 2（导出时长上限）、Property 3（导出文件名格式）、Property 4（SessionId 输入验证）和视频导出单元测试。全部 27 个测试通过。
+
+**遇到的问题：**
+- **[依赖]：** fast-check v4.6.0 不提供 `fc.stringOf()` 方法（v3 API 已移除）
+  - **解决方案：** 使用 `fc.array(fc.constantFrom(...)).map(arr => arr.join(''))` 替代，功能等价
+- **[设计决策]：** Property 4（SessionId 验证）无法通过 supertest 测试，因 JWT 中间件先于 sessionId 验证执行
+  - **解决方案：** 直接调用 `getVideoClip` handler 并传入 mock req/res 对象，绕过 JWT 中间件
+
+**经验教训：** fast-check v4 与 v3 API 有差异，使用前应检查当前版本可用方法。对于需要绕过中间件的 handler 测试，mock req/res 是最简洁的方案。
+
+**涉及的文件/组件：** viewer/server/__tests__/events.test.ts
+
+---
+
+### 2026-04-01 — 任务: event-video-export 1.3-1.7 后端属性测试与单元测试
+
+**概要：** 在 `viewer/server/__tests__/events.test.ts` 中新增 4 个属性测试（Property 1-4）和后端单元测试。Property 1 验证时间范围缓冲计算，Property 2 验证 300s 上限，Property 3 验证文件名格式，Property 4 验证 sessionId 空白拒绝。单元测试覆盖 JWT 认证、纯函数边界情况和 handler 级别验证。共 27 个测试全部通过。
+
+**遇到的问题：**
+- **[类型: 依赖]：** `fc.stringOf()` 在 fast-check v4.6.0 中不存在
+  - **解决方案/状态：** 改用 `fc.array(fc.constantFrom(...)).map(arr => arr.join(''))` 替代
+- **[类型: 设计决策]：** Property 4 (SessionId 验证) 无法通过 supertest 测试，因为 JWT 中间件会先返回 401
+  - **解决方案/状态：** 使用 mock req/res 直接调用 `getVideoClip` handler 绕过 JWT 中间件
+
+**经验教训：** 对于需要绕过中间件的 handler 测试，直接构造 mock req/res 比 supertest 更灵活。fast-check API 在不同版本间有差异，需注意版本兼容性。
+
+**涉及的文件/组件：** `viewer/server/__tests__/events.test.ts`
+
+---
+
+### 2026-04-01 — 任务: event-video-export 2. 检查点 — 后端 API 验证
+
+**概要：** 后端检查点验证通过。27 个后端测试全部通过（含 4 个属性测试 × 100 次迭代 + 单元测试）。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**涉及的文件/组件：** 无文件变更，仅验证。
+
+---
+
+### 2026-04-01 — 任务: event-video-export 3.1-3.3 前端视频导出交互
+
+**概要：** 完成前端三个子任务：在 `events.ts` 中新增 `exportVideoClip` 函数（fetch blob + 解析 Content-Disposition 文件名）；在 `EventsPanel.tsx` 的 EventCard 中新增下载按钮（含 loading/error 状态管理、stopPropagation 防止触发回放、3 秒自动清除错误）；在 `EventsPanel.test.ts` 中新增 8 个单元测试（下载状态机模型 + 下载/回放独立性验证）。35 个前端测试全部通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 模型化测试（纯函数状态机）比 React 渲染测试更轻量且稳定，适合验证状态转换逻辑。
+
+**涉及的文件/组件：** `viewer/src/services/events.ts`、`viewer/src/components/EventsPanel.tsx`、`viewer/src/__tests__/EventsPanel.test.ts`
+
+---
+
+### 2026-04-01 — 任务: event-video-export 4.1-4.2 集成与连接
+
+**概要：** 验证 KVS SDK 依赖已安装，在 Dockerfile 中添加 `KVS_STREAM_NAME` 环境变量。端到端连接验证：路由注册正确（`GET /api/events/:sessionId/clip` + verifyJwt）、前端 API 路径匹配、EventCard 正确传递 idToken。
+
+**遇到的问题：**
+- 顺利完成。KVS SDK 包已在 package.json 中存在，仅需在 Dockerfile 中补充环境变量。
+
+**涉及的文件/组件：** `viewer/Dockerfile`
+
+---
+
+### 2026-04-01 — 任务: event-video-export 5. 最终检查点
+
+**概要：** 最终检查点验证。62 个 event-video-export 相关测试全部通过（27 后端 + 35 前端）。全局测试中有 1 个 `useHLS.test.ts` 的预存时间敏感测试失败，与本次变更无关。
+
+**遇到的问题：**
+- **[类型: 边界情况]：** `useHLS.test.ts` 中 `getDefaultTimeRange` 测试因时间漂移失败，是预存问题
+  - **解决方案/状态：** 不影响本次功能，后续可修复该时间敏感测试
+
+**涉及的文件/组件：** 无文件变更，仅验证。
+
+---

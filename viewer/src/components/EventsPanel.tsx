@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import type { ActivityEvent, AWSCredentials } from '../types';
 import { useEvents } from '../hooks/useEvents';
 import { useHLS } from '../hooks/useHLS';
-import { fetchThumbnailUrl } from '../services/events';
+import { fetchThumbnailUrl, exportVideoClip } from '../services/events';
 
 // ===== Constants =====
 
@@ -199,6 +199,8 @@ interface EventCardProps {
 function EventCard({ event, idToken, isActive, onClick }: EventCardProps) {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null);
   const [thumbError, setThumbError] = useState(false);
+  const [downloadState, setDownloadState] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   // Load thumbnail on mount
   useEffect(() => {
@@ -211,6 +213,38 @@ function EventCard({ event, idToken, isActive, onClick }: EventCardProps) {
   const handleClick = useCallback(() => {
     onClick(event);
   }, [event, onClick]);
+
+  const handleDownload = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation(); // Prevent triggering event playback
+      if (!idToken || downloadState === 'loading') return;
+
+      setDownloadState('loading');
+      setDownloadError(null);
+
+      try {
+        const { blob, filename } = await exportVideoClip(event.sessionId, idToken);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        setDownloadState('idle');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '下载失败';
+        setDownloadError(msg);
+        setDownloadState('error');
+        setTimeout(() => {
+          setDownloadState('idle');
+          setDownloadError(null);
+        }, 3000);
+      }
+    },
+    [event.sessionId, idToken, downloadState],
+  );
 
   const icon = CLASS_ICONS[event.detectedClass] ?? '❓';
   const isBirdWithSpecies = event.primaryClass === 'bird' && !!event.birdSpecies;
@@ -264,6 +298,29 @@ function EventCard({ event, idToken, isActive, onClick }: EventCardProps) {
         <div className="text-xs text-gray-400">
           置信度 {(event.maxConfidence * 100).toFixed(0)}%
         </div>
+      </div>
+
+      {/* Download button */}
+      <div className="flex shrink-0 flex-col items-center gap-1">
+        <button
+          onClick={handleDownload}
+          disabled={downloadState === 'loading'}
+          className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 disabled:opacity-50"
+          title="下载视频"
+        >
+          {downloadState === 'loading' ? (
+            <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+          ) : (
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+            </svg>
+          )}
+        </button>
+        {downloadState === 'error' && downloadError && (
+          <span className="max-w-[80px] truncate text-[10px] text-red-500" title={downloadError}>
+            {downloadError}
+          </span>
+        )}
       </div>
     </button>
   );

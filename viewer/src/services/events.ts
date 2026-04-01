@@ -45,3 +45,35 @@ export async function fetchThumbnailUrl(
   const data = (await res.json()) as { url: string };
   return data.url;
 }
+
+/**
+ * Download an event video clip.
+ * Returns a Blob and filename for browser download.
+ *
+ * Validates: Requirements 2.2, 2.4, 2.5
+ */
+export async function exportVideoClip(
+  sessionId: string,
+  token: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(
+    `/api/events/${encodeURIComponent(sessionId)}/clip`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(
+      (body as { error?: string }).error ?? `Export failed: ${res.status}`,
+    );
+  }
+
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const filenameMatch = disposition.match(/filename="?([^"]+)"?/);
+  const filename = filenameMatch?.[1] || `event_${sessionId}.mkv`;
+
+  return { blob, filename };
+}

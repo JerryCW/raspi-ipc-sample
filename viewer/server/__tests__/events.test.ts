@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fc from 'fast-check';
 import request from 'supertest';
 import { app } from '../index.js';
-import { isValidDateFormat, isWithin90Days } from '../events.js';
+import {
+  isValidDateFormat,
+  isWithin90Days,
+  computeClipRange,
+  generateClipFilename,
+  getVideoClip,
+} from '../events.js';
 
 // ---------------------------------------------------------------------------
 // Helpers: fast-check arbitraries
@@ -359,5 +365,242 @@ describe('Unit: Events API new field mapping', () => {
     expect(event.detectedClasses).toContain('dog');
     expect(event.birdSpecies).toBe('Eurasian Tree Sparrow');
     expect(event.candidateScreenshots).toHaveLength(3);
+  });
+});
+
+
+// ===========================================================================
+// Property 1: 时间范围缓冲计算
+// Feature: event-video-export, Property 1: 时间范围缓冲计算
+// **Validates: Requirements 1.2**
+// ===========================================================================
+
+describe('Property 1: 时间范围缓冲计算', () => {
+  it('clipStart === kvsStart - 5000ms and clipEnd === kvsEnd + 5000ms when duration within limit', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1_000_000_000_000, max: 1_900_000_000_000 }),
+        fc.integer({ min: 0, max: 290_000 }),
+        (kvsStart, offset) => {
+          const kvsEnd = kvsStart + offset;
+          const { clipStart, clipEnd } = computeClipRange(kvsStart, kvsEnd);
+          expect(clipStart.getTime()).toBe(kvsStart - 5000);
+          expect(clipEnd.getTime()).toBe(kvsEnd + 5000);
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+});
+
+
+// ===========================================================================
+// Property 2: 导出时长上限
+// Feature: event-video-export, Property 2: 导出时长上限
+// **Validates: Requirements 4.1, 4.2**
+// ===========================================================================
+
+describe('Property 2: 导出时长上限', () => {
+  it('clip duration never exceeds 300000ms for any input', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1_000_000_000_000, max: 1_900_000_000_000 }),
+        fc.integer({ min: 0, max: 600_000 }),
+        (kvsStart, offset) => {
+          const kvsEnd = kvsStart + offset;
+          const { clipStart, clipEnd } = computeClipRange(kvsStart, kvsEnd);
+          const duration = clipEnd.getTime() - clipStart.getTime();
+          expect(duration).toBeLessThanOrEqual(300_000);
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it('when buffered duration exceeds 300s, clipEnd === clipStart + 300000', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1_000_000_000_000, max: 1_900_000_000_000 }),
+        fc.integer({ min: 290_001, max: 600_000 }),
+        (kvsStart, offset) => {
+          const kvsEnd = kvsStart + offset;
+          const { clipStart, clipEnd } = computeClipRange(kvsStart, kvsEnd);
+          // With 10s buffer total, offset > 290000 means total > 300s → capped
+          expect(clipEnd.getTime()).toBe(clipStart.getTime() + 300_000);
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+});
+
+
+// ===========================================================================
+// Property 3: 导出文件名格式
+// Feature: event-video-export, Property 3: 导出文件名格式
+// **Validates: Requirements 1.4, 2.4**
+// ===========================================================================
+
+describe('Property 3: 导出文件名格式', () => {
+  it('filename matches {class}_{YYYY-MM-DDThh-mm-ss}.mkv for any class and timestamp', () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom('person', 'cat', 'dog', 'bird'),
+        fc.integer({ min: 1_000_000_000_000, max: 1_900_000_000_000 }),
+        (detectedClass, timestamp) => {
+          const filename = generateClipFilename(detectedClass, timestamp);
+          // Matches full pattern
+          expect(filename).toMatch(
+            /^(person|cat|dog|bird)_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.mkv$/,
+          );
+          // Starts with the detected class
+          expect(filename.startsWith(detectedClass)).toBe(true);
+          // Ends with .mkv
+          expect(filename.endsWith('.mkv')).toBe(true);
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+});
+
+
+// ===========================================================================
+// Property 4: SessionId 输入验证
+// Feature: event-video-export, Property 4: SessionId 输入验证
+// **Validates: Requirements 4.3**
+// ===========================================================================
+
+describe('Property 4: SessionId 输入验证', () => {
+  it('getVideoClip returns 400 for whitespace-only sessionId', async () => {
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(fc.constantFrom(' ', '\t', '\n', '\r'), { minLength: 1, maxLength: 10 }).map((arr) => arr.join('')),
+        async (whitespace) => {
+          let statusCode = 0;
+          let body: Record<string, unknown> = {};
+          const mockReq = { params: { sessionId: whitespace } } as any;
+          const mockRes = {
+            status(code: number) {
+              statusCode = code;
+              return this;
+            },
+            json(data: Record<string, unknown>) {
+              body = data;
+              return this;
+            },
+          } as any;
+
+          await getVideoClip(mockReq, mockRes);
+          expect(statusCode).toBe(400);
+          expect(body).toHaveProperty('error');
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it('getVideoClip returns 400 for empty string sessionId', async () => {
+    let statusCode = 0;
+    let body: Record<string, unknown> = {};
+    const mockReq = { params: { sessionId: '' } } as any;
+    const mockRes = {
+      status(code: number) {
+        statusCode = code;
+        return this;
+      },
+      json(data: Record<string, unknown>) {
+        body = data;
+        return this;
+      },
+    } as any;
+
+    await getVideoClip(mockReq, mockRes);
+    expect(statusCode).toBe(400);
+    expect(body).toHaveProperty('error');
+  });
+});
+
+
+// ===========================================================================
+// Unit Tests: Video Clip Export
+// **Validates: Requirements 1.5, 1.6, 1.7, 5.1, 5.2**
+// ===========================================================================
+
+describe('Unit: Video Clip Export', () => {
+  // --- Auth tests via supertest (no mocking needed) ---
+
+  it('GET /api/events/:sessionId/clip without Authorization returns 401', async () => {
+    const res = await request(app as any).get('/api/events/test-session/clip');
+    expect(res.status).toBe(401);
+    expect(res.body).toHaveProperty('error');
+  });
+
+  it('GET /api/events/:sessionId/clip with invalid token returns 401', async () => {
+    const res = await request(app as any)
+      .get('/api/events/test-session/clip')
+      .set('Authorization', 'Bearer invalid-token-value');
+    expect(res.status).toBe(401);
+    expect(res.body).toHaveProperty('error');
+  });
+
+  // --- Pure function: computeClipRange edge cases ---
+
+  it('computeClipRange with zero-duration event adds 10s buffer', () => {
+    const ts = 1_700_000_000_000;
+    const { clipStart, clipEnd } = computeClipRange(ts, ts);
+    expect(clipStart.getTime()).toBe(ts - 5000);
+    expect(clipEnd.getTime()).toBe(ts + 5000);
+    expect(clipEnd.getTime() - clipStart.getTime()).toBe(10_000);
+  });
+
+  it('computeClipRange caps at exactly 300s boundary', () => {
+    const kvsStart = 1_700_000_000_000;
+    // 290s event + 10s buffer = exactly 300s → should NOT be capped
+    const kvsEnd = kvsStart + 290_000;
+    const { clipStart, clipEnd } = computeClipRange(kvsStart, kvsEnd);
+    expect(clipEnd.getTime() - clipStart.getTime()).toBe(300_000);
+  });
+
+  it('computeClipRange caps at 300s for long events', () => {
+    const kvsStart = 1_700_000_000_000;
+    const kvsEnd = kvsStart + 400_000; // 400s event + 10s buffer = 410s → capped
+    const { clipStart, clipEnd } = computeClipRange(kvsStart, kvsEnd);
+    expect(clipEnd.getTime() - clipStart.getTime()).toBe(300_000);
+    expect(clipStart.getTime()).toBe(kvsStart - 5000);
+    expect(clipEnd.getTime()).toBe(clipStart.getTime() + 300_000);
+  });
+
+  // --- Pure function: generateClipFilename edge cases ---
+
+  it('generateClipFilename produces correct format for known timestamp', () => {
+    // 2024-01-15T08:30:00.000Z
+    const ts = new Date('2024-01-15T08:30:00.000Z').getTime();
+    const filename = generateClipFilename('bird', ts);
+    expect(filename).toBe('bird_2024-01-15T08-30-00.mkv');
+  });
+
+  it('generateClipFilename uses detected class in filename', () => {
+    const ts = new Date('2024-06-01T12:00:00.000Z').getTime();
+    expect(generateClipFilename('person', ts)).toMatch(/^person_/);
+    expect(generateClipFilename('cat', ts)).toMatch(/^cat_/);
+    expect(generateClipFilename('dog', ts)).toMatch(/^dog_/);
+    expect(generateClipFilename('bird', ts)).toMatch(/^bird_/);
+  });
+
+  // --- Handler-level tests with mock req/res ---
+
+  it('getVideoClip returns 400 for undefined sessionId', async () => {
+    let statusCode = 0;
+    let body: Record<string, unknown> = {};
+    const mockReq = { params: {} } as any;
+    const mockRes = {
+      status(code: number) { statusCode = code; return this; },
+      json(data: Record<string, unknown>) { body = data; return this; },
+    } as any;
+
+    await getVideoClip(mockReq, mockRes);
+    expect(statusCode).toBe(400);
+    expect(body.error).toBe('Invalid sessionId');
   });
 });

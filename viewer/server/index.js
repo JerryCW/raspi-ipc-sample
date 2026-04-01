@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { verifyJwt, getEvents, getThumbnail } from './events.js';
+import { verifyJwt, getEvents, getThumbnail, getVideoClip } from './events.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -18,6 +18,7 @@ app.get('/health', (_req, res) => {
 // Events API — protected by JWT
 app.get('/api/events', verifyJwt, getEvents);
 app.get('/api/events/:sessionId/thumbnail', verifyJwt, getThumbnail);
+app.get('/api/events/:sessionId/clip', verifyJwt, getVideoClip);
 
 // Catch-all for unknown API routes — return 404
 app.all('/api/{*splat}', (_req, res) => {

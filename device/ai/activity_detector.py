@@ -272,24 +272,6 @@ def main() -> None:
     )
     config = DetectorConfig.from_ini(config_path)
 
-    # Start S3 uploader in a background thread
-    import threading
-    from device.ai.s3_uploader import S3Uploader
-    device_id = os.environ.get("DEVICE_ID", "raspi-camera-01")
-    s3_client = None
-    try:
-        from device.ai.iot_credential_provider import load_iot_config, create_iot_boto3_session
-        iot_config = load_iot_config(config_path)
-        if iot_config.credential_endpoint and iot_config.cert_path:
-            session = create_iot_boto3_session(iot_config)
-            s3_client = session.client("s3")
-    except Exception:
-        pass  # Fall back to default boto3 chain
-
-    uploader = S3Uploader(config, device_id=device_id, s3_client=s3_client)
-    uploader_thread = threading.Thread(target=uploader.run, daemon=True, name="s3-uploader")
-    uploader_thread.start()
-
     detector = ActivityDetector(config)
     detector.connect_ipc()
     detector.run()

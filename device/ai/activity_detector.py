@@ -114,6 +114,24 @@ class ActivityDetector:
                 consecutive_failures += 1
                 # Exponential backoff: 0s, 2s, 4s, 8s, 16s, 30s, 30s, ...
                 backoff = min(2 ** consecutive_failures, 30) if consecutive_failures > 1 else 0
+
+                # After 5 consecutive failures (~1 min of stall), restart smart-camera
+                if consecutive_failures == 5:
+                    logger.error(
+                        "FrameExporter stalled for %d attempts, restarting smart-camera service",
+                        consecutive_failures,
+                    )
+                    import subprocess
+                    try:
+                        subprocess.run(
+                            ["sudo", "systemctl", "restart", "smart-camera"],
+                            timeout=30, check=False,
+                        )
+                        logger.info("smart-camera service restart requested")
+                        time.sleep(10)  # wait for pipeline to initialize
+                    except Exception as restart_exc:
+                        logger.error("Failed to restart smart-camera: %s", restart_exc)
+
                 logger.warning(
                     "IPC connection lost (%s), reconnecting in %ds… (attempt %d)",
                     exc, backoff, consecutive_failures,

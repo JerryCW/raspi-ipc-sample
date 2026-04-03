@@ -220,8 +220,10 @@ std::string GStreamerPipeline::build_pipeline_description(
        << " ! video/x-h264,stream-format=byte-stream,alignment=au"
        << " ! appsink name=webrtc_sink max-buffers=1 drop=true sync=false async=false emit-signals=false";
 
-    // ── AI branch: raw video appsink for Frame_Buffer_Pool ──
+    // ── AI branch: videoconvert to BGR for Python OpenCV consumption ──
     ss << " t. ! queue max-size-buffers=2 leaky=downstream"
+       << " ! videoconvert"
+       << " ! video/x-raw,format=BGR"
        << " ! appsink name=ai_sink max-buffers=2 drop=true sync=false async=false emit-signals=false";
 
     return ss.str();

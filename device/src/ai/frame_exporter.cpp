@@ -123,7 +123,7 @@ Result<std::vector<AnalysisResult>> FrameExporter::analyze(const FrameBuffer& fr
     notification.size = frame_data_size;
     notification.width = frame.info().width;
     notification.height = frame.info().height;
-    notification.pixel_format = "NV12";  // Default; FrameInfo doesn't carry pixel_format
+    notification.pixel_format = "BGR";  // AI appsink outputs BGR via videoconvert
 
     // Convert steady_clock timestamp to Unix milliseconds
     auto now_system = std::chrono::system_clock::now();

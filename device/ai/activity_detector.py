@@ -98,10 +98,13 @@ class ActivityDetector:
                 notif = self.ipc.receive_notification()
                 raw = self.ipc.read_frame(notif)
 
-                # Convert from NV12/YUV to BGR for YOLO
-                # Pi CSI camera (libcamera) outputs NV21 (V before U in chroma plane),
-                # not NV12. Using COLOR_YUV2BGR_NV12 causes R/B channel swap (green/purple tint).
-                if notif.pixel_format == "NV12":
+                # Convert frame to BGR for YOLO
+                # AI appsink outputs BGR directly via GStreamer videoconvert,
+                # so just reshape — no color conversion needed.
+                if notif.pixel_format == "BGR":
+                    frame = raw.reshape((notif.height, notif.width, 3))
+                elif notif.pixel_format == "NV12":
+                    # Legacy fallback: NV12/NV21 from older pipeline versions
                     yuv = raw.reshape((notif.height * 3 // 2, notif.width))
                     frame = cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV21)
                 else:

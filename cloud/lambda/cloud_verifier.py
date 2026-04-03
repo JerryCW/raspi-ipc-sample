@@ -100,10 +100,13 @@ def _process_event(
     # 1. Download and parse metadata.json
     metadata = _download_metadata(s3_client, bucket, metadata_key)
 
-    # Early exit: if metadata already has verification_status, this is a
-    # re-trigger caused by our own put_object writing back to the same key.
-    if "verification_status" in metadata:
-        logger.info("Already verified (re-trigger), skipping: %s", event_id)
+    # Early exit: if metadata already has a terminal verification_status
+    # (verified/rejected), this is a re-trigger — skip to avoid reprocessing.
+    # Note: edge-uploaded metadata has verification_status="pending", which
+    # should NOT be skipped.
+    existing_status = metadata.get("verification_status")
+    if existing_status and existing_status != "pending":
+        logger.info("Already verified (re-trigger), skipping: %s (status=%s)", event_id, existing_status)
         return {"status": "skipped", "event_id": event_id, "reason": "already_verified"}
 
     session_id = metadata.get("session_id", event_id)

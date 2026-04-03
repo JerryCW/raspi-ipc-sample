@@ -192,6 +192,24 @@ class S3Uploader:
         dt = datetime.fromtimestamp(kvs_start_ts / 1000.0, tz=timezone.utc)
         date_str = dt.strftime("%Y-%m-%d")
         s3_json_key = f"captures/{self.device_id}/{date_str}/{kvs_start_ts}_{detected_class}_metadata.json"
+
+        # Rewrite candidate_screenshots in metadata to use S3 filenames
+        # (local names are {session_id}_candidate_N.jpg, S3 names are
+        # {timestamp}_{class}.candidate_N.jpg)
+        s3_candidate_filenames = []
+        for cp in candidate_paths:
+            cp_path = Path(cp)
+            suffix = cp_path.name.replace(f"{session_id}_", "")  # candidate_N.jpg
+            ext = suffix.replace(".jpg", "")  # candidate_N
+            s3_candidate_filenames.append(f"{kvs_start_ts}_{detected_class}.{ext}.jpg")
+        if s3_candidate_filenames:
+            metadata["candidate_screenshots"] = s3_candidate_filenames
+            # Also rewrite start_screenshot_filename
+            metadata["start_screenshot_filename"] = f"{kvs_start_ts}_{detected_class}.start.jpg"
+            # Write updated metadata back to local file before upload
+            with open(json_path, "w") as f:
+                json.dump(metadata, f, ensure_ascii=False, indent=2)
+
         files_to_upload.append((str(json_p), s3_json_key))
 
         # Upload all files with retry

@@ -58,14 +58,14 @@ add_executable(test_connection_monitor test_connection_monitor.cpp)
 target_link_libraries(test_connection_monitor PRIVATE connection_monitor GTest::gtest_main)
 gtest_discover_tests(test_connection_monitor)
 
-# test_health_monitor — unit tests for HealthMonitor
+# test_health_monitor — unit tests + property tests for HealthMonitor
 add_executable(test_health_monitor test_health_monitor.cpp)
-target_link_libraries(test_health_monitor PRIVATE health_monitor GTest::gtest_main)
+target_link_libraries(test_health_monitor PRIVATE health_monitor rapidcheck rapidcheck_gtest GTest::gtest_main)
 gtest_discover_tests(test_health_monitor)
 
-# test_watchdog — unit tests for Watchdog
+# test_watchdog — unit tests + property tests for Watchdog
 add_executable(test_watchdog test_watchdog.cpp)
-target_link_libraries(test_watchdog PRIVATE watchdog GTest::gtest_main)
+target_link_libraries(test_watchdog PRIVATE watchdog rapidcheck rapidcheck_gtest GTest::gtest_main)
 gtest_discover_tests(test_watchdog)
 
 # test_frame_buffer_pool — unit tests for Frame_Buffer_Pool

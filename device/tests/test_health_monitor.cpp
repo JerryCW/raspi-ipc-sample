@@ -1,6 +1,10 @@
 #include "monitor/health_monitor.h"
 
 #include <gtest/gtest.h>
+#include <rapidcheck.h>
+#include <rapidcheck/detail/TestParams.h>
+#include <rapidcheck/detail/TestMetadata.h>
+#include <rapidcheck/detail/Results.h>
 
 #include <atomic>
 #include <chrono>
@@ -15,7 +19,11 @@ namespace {
 
 class StubPipeline : public IGStreamerPipeline {
 public:
-    VoidResult build(const PipelineConfig&) override { return OkVoid(); }
+    VoidResult build(const PipelineConfig&) override {
+        state_ = State::READY;
+        build_count_++;
+        return OkVoid();
+    }
 
     VoidResult start() override {
         state_ = State::PLAYING;
@@ -31,6 +39,7 @@ public:
 
     VoidResult destroy() override {
         state_ = State::NULL_STATE;
+        destroy_count_++;
         return OkVoid();
     }
 
@@ -41,11 +50,15 @@ public:
 
     int start_count() const { return start_count_; }
     int stop_count() const { return stop_count_; }
+    int destroy_count() const { return destroy_count_; }
+    int build_count() const { return build_count_; }
 
 private:
     State state_ = State::NULL_STATE;
     int start_count_ = 0;
     int stop_count_ = 0;
+    int destroy_count_ = 0;
+    int build_count_ = 0;
 };
 
 // Helper to create a PipelineError with current timestamp
@@ -282,6 +295,128 @@ TEST(HealthMonitorTest, ReportErrorTriggersRestart) {
     EXPECT_EQ(pipeline->stop_count(), 1);
     EXPECT_EQ(pipeline->start_count(), 1);
     EXPECT_EQ(monitor.restart_count_in_window(), 1u);
+}
+
+// ============================================================
+// Property Test: Bug Condition — Frame stall not detected
+// Validates: Requirements 1.1, 2.1, 2.2
+//
+// Bug condition: elapsed > stall_timeout AND pipeline_state == PLAYING
+//                AND gstreamerBusErrorCount == 0
+//                AND healthMonitorDetected == false
+//
+// This test asserts the EXPECTED behavior: after a frame stall
+// exceeding stall_timeout (30s), HealthMonitor SHOULD detect
+// the stall and attempt recovery (restart_count_in_window > 0).
+//
+// On UNFIXED code this will FAIL — proving the bug exists:
+// HealthMonitor has NO frame stall detection capability.
+// ============================================================
+
+TEST(HealthMonitorBugCondition, FrameStallShouldBeDetected) {
+    rc::detail::TestParams params;
+    params.maxSuccess = 20;
+    rc::detail::TestMetadata metadata;
+    metadata.id = "FrameStallShouldBeDetected";
+    auto result = rc::detail::checkTestable([]() {
+        const auto stall_seconds = *rc::gen::inRange(31, 121);
+
+        HealthMonitor monitor(std::chrono::seconds(600), 5,
+                              std::chrono::seconds(0), 3);
+        auto pipeline = std::make_shared<StubPipeline>();
+        PipelineConfig config;
+
+        pipeline->build(config);
+        pipeline->start();
+        RC_ASSERT(pipeline->current_state() == IGStreamerPipeline::State::PLAYING);
+
+        auto start_result = monitor.start(pipeline, config);
+        RC_ASSERT(start_result.is_ok());
+
+        monitor.report_frame_produced();
+        monitor.check_frame_stall();
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        monitor.check_frame_stall();
+
+        RC_ASSERT(pipeline->destroy_count() > 0);
+        RC_ASSERT(pipeline->build_count() > 0);
+        RC_TAG(stall_seconds);
+    }, metadata, params);
+    ASSERT_TRUE(result.template is<rc::detail::SuccessResult>());
+}
+
+// ============================================================
+// Property 2a: Preservation — report_error() triggers
+// attempt_restart() behavior consistently
+// Validates: Requirements 3.1, 3.2
+//
+// For any restart_window (10-600s) and max_restarts (1-10),
+// report_error() increments restart_count, and after reaching
+// the limit, attempt_restart() returns false.
+// ============================================================
+
+TEST(HealthMonitorPreservation, ReportErrorTriggersRestartConsistently) {
+    rc::detail::TestParams params;
+    params.maxSuccess = 20;
+    rc::detail::TestMetadata metadata;
+    metadata.id = "ReportErrorTriggersRestartConsistently";
+    auto result = rc::detail::checkTestable([]() {
+        const auto restart_window = *rc::gen::inRange(10, 601);
+        const auto max_restarts = *rc::gen::inRange(1, 11);
+
+        HealthMonitor monitor(std::chrono::seconds(restart_window),
+                              static_cast<uint32_t>(max_restarts));
+        auto pipeline = std::make_shared<StubPipeline>();
+        auto start_result = monitor.start(pipeline);
+        RC_ASSERT(start_result.is_ok());
+
+        for (int i = 1; i <= max_restarts; ++i) {
+            monitor.report_error(make_error());
+            RC_ASSERT(monitor.restart_count_in_window() == static_cast<uint32_t>(i));
+        }
+
+        RC_ASSERT(monitor.is_restart_limit_reached());
+        bool ok = monitor.attempt_restart();
+        RC_ASSERT(!ok);
+        RC_ASSERT(monitor.restart_count_in_window() == static_cast<uint32_t>(max_restarts));
+    }, metadata, params);
+    ASSERT_TRUE(result.template is<rc::detail::SuccessResult>());
+}
+
+// ============================================================
+// Property 2b: Preservation — pipeline stop/start counts
+// equal successful restarts
+// Validates: Requirements 3.1, 3.2
+//
+// For any error sequence length (1-20), pipeline->stop_count()
+// and pipeline->start_count() equal min(error_count, max_restarts).
+// ============================================================
+
+TEST(HealthMonitorPreservation, PipelineStopStartCountsEqualSuccessfulRestarts) {
+    rc::detail::TestParams params;
+    params.maxSuccess = 20;
+    rc::detail::TestMetadata metadata;
+    metadata.id = "PipelineStopStartCountsEqualSuccessfulRestarts";
+    auto result = rc::detail::checkTestable([]() {
+        const auto error_count = *rc::gen::inRange(1, 21);
+        const auto max_restarts = *rc::gen::inRange(1, 11);
+
+        HealthMonitor monitor(std::chrono::seconds(600),
+                              static_cast<uint32_t>(max_restarts));
+        auto pipeline = std::make_shared<StubPipeline>();
+        auto start_result = monitor.start(pipeline);
+        RC_ASSERT(start_result.is_ok());
+
+        for (int i = 0; i < error_count; ++i) {
+            monitor.report_error(make_error());
+        }
+
+        const int expected = std::min(error_count, max_restarts);
+        RC_ASSERT(pipeline->stop_count() == expected);
+        RC_ASSERT(pipeline->start_count() == expected);
+    }, metadata, params);
+    ASSERT_TRUE(result.template is<rc::detail::SuccessResult>());
 }
 
 }  // namespace

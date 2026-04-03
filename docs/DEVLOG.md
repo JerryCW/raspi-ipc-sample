@@ -1823,3 +1823,111 @@ _暂无。_
 **涉及的文件/组件：** 无文件变更，仅验证。
 
 ---
+
+### [2026-04-03] — 任务: Pipeline Stall Recovery - Task 1 Bug 条件探索性测试
+
+**概要：** 编写 RapidCheck 属性测试验证 HealthMonitor 缺少帧停滞检测能力。测试在未修复代码上按预期 FAIL，确认 bug 存在。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。测试按预期失败，反例为 `stall_seconds = 31`：帧停滞后 `restart_count_in_window()` 仍为 0。
+
+**经验教训：** Bug 条件探索性测试无法真正模拟时间流逝（不能在测试中等待 31-120 秒），因此通过验证 HealthMonitor 缺少帧停滞检测接口来间接证明 bug 存在。
+
+**涉及的文件/组件：** device/tests/test_health_monitor.cpp, device/tests/CMakeLists.txt
+
+---
+
+### [2026-04-03] — 任务: Pipeline Stall Recovery - Task 2 Preservation 属性测试
+
+**概要：** 编写 Preservation 属性测试捕获修复前的基线行为。Property 2a/2b 在 test_health_monitor.cpp 中验证 report_error/attempt_restart 行为一致性，Property 2c 在 test_watchdog.cpp 中验证错误率追踪、心跳过期检测和无 FrameProduction 模块。所有测试在未修复代码上通过。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** Preservation 测试的关键是选择合适的不变量——既要覆盖现有行为，又不能过度约束导致合理修改也触发失败。
+
+**涉及的文件/组件：** device/tests/test_health_monitor.cpp, device/tests/test_watchdog.cpp, device/tests/CMakeLists.txt
+
+---
+
+### [2026-04-03] — 任务: Pipeline Stall Recovery - Task 3.1 扩展 HealthMonitor 接口
+
+**概要：** 在 health_monitor.h 中添加帧停滞检测接口：report_frame_produced()、check_frame_stall()、attempt_full_recovery()、on_fatal_failure() 回调、start() 重载（接受 PipelineConfig）、以及相关私有成员变量。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** start() 使用重载而非修改原签名，保持向后兼容。
+
+**涉及的文件/组件：** device/include/monitor/health_monitor.h
+
+---
+
+### [2026-04-03] — 任务: Pipeline Stall Recovery - Task 3.2 实现帧停滞检测逻辑
+
+**概要：** 在 health_monitor.cpp 中实现 report_frame_produced()、check_frame_stall()、attempt_full_recovery()、on_fatal_failure()、start() 重载。完整的 stop→destroy→build→start 恢复序列，含连续失败计数和致命回调。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** attempt_full_recovery() 与 attempt_restart() 是两条独立路径——前者做完整重建，后者仅 stop+start。两者都记录 restart_timestamps_ 以共享窗口限制。
+
+**涉及的文件/组件：** device/src/monitor/health_monitor.cpp
+
+---
+
+### [2026-04-03] — 任务: Pipeline Stall Recovery - Task 3.3 集成帧心跳到 main.cpp
+
+**概要：** 在 main.cpp 中集成帧心跳报告和周期性停滞检测：WebRTC/AI 帧拉取线程成功拉帧后调用 report_frame_produced() 和 watchdog->heartbeat("FrameProduction")，主循环每 5 秒调用 check_frame_stall()，注册 on_fatal_failure 回调触发 shutdown。
+
+**遇到的问题：**
+- **[类型: 设计决策]：** pipe_cfg 原本在 step 5 的块作用域内声明，需要提升到外层以便 step 10 的 health_mon->start(gst_pipeline, pipe_cfg) 使用
+  - **解决方案/状态：** 将 PipelineConfig pipe_cfg 声明移到块作用域外
+
+**经验教训：** 变量作用域需要在集成阶段提前规划，避免后续需要跨步骤共享时的重构。
+
+**涉及的文件/组件：** device/src/main.cpp
+
+---
+
+### [2026-04-03] — 任务: Pipeline Stall Recovery - Task 3.4 + 3.5 StubPipeline 更新与 CMakeLists
+
+**概要：** 扩展 StubPipeline 添加 destroy_count/build_count 计数器，更新 Bug 条件探索性测试使用 stall_timeout=0s 验证帧停滞检测机制。扩展 HealthMonitor 构造函数接受 stall_timeout 和 max_recovery_attempts 参数。CMakeLists.txt 的 rapidcheck 链接已在 Task 1/2 中完成。
+
+**遇到的问题：**
+- **[类型: 设计决策]：** stall_timeout_ 是私有成员，测试无法直接设置。通过扩展构造函数参数解决，保持向后兼容（默认值 30s/3）。
+  - **解决方案/状态：** 4 参数构造函数，后两个有默认值。
+- **[类型: 设计决策]：** check_frame_stall() 原用秒精度比较，stall_timeout=0s 时可能不触发。改为毫秒精度。
+  - **解决方案/状态：** 使用 duration_cast<milliseconds> 替代 seconds。
+
+**经验教训：** 测试驱动的 API 设计——当测试需要控制超时参数时，应通过构造函数暴露而非硬编码。
+
+**涉及的文件/组件：** device/tests/test_health_monitor.cpp, device/include/monitor/health_monitor.h, device/src/monitor/health_monitor.cpp
+
+---
+
+### [2026-04-03] — 任务: Pipeline Stall Recovery - Task 3.6 验证 Bug 条件测试通过
+
+**概要：** 重新运行 Task 1 的 Bug 条件探索性测试，确认修复后测试通过。14 个 HealthMonitor 测试全部通过，0 失败。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** Bug 条件探索性测试的双重用途——修复前失败证明 bug 存在，修复后通过验证 fix 正确性。
+
+**涉及的文件/组件：** 无文件变更（仅验证）
+
+---
+
+### [2026-04-03] — 任务: 4. 检查点 — 确保所有测试通过（pipeline-stall-recovery）
+
+**概要：** 执行完整测试套件检查点。cmake 构建成功（0 错误），全部 513 个测试通过（0 失败）。包括新增的 Bug 条件探索性测试（Property 1）、Preservation 属性测试（Property 2a/2b/2c）以及所有现有单元测试。
+
+**遇到的问题：**
+- 顺利完成，未遇到问题。
+
+**经验教训：** 513 个测试中 WebRTC 相关属性测试（特别是 ShutdownStateConsistency）耗时较长（~257 秒），整体测试套件运行约 5-6 分钟。后续可考虑标记慢速测试以支持快速反馈循环。
+
+**涉及的文件/组件：** 无文件变更（仅验证构建和测试）
+
+---

@@ -11,10 +11,14 @@ namespace sc {
 // ============================================================
 
 HealthMonitor::HealthMonitor(std::chrono::seconds restart_window,
-                             uint32_t max_restarts)
+                             uint32_t max_restarts,
+                             std::chrono::seconds stall_timeout,
+                             uint32_t max_recovery_attempts)
     : restart_window_(restart_window)
     , max_restarts_(max_restarts)
-    , window_start_(std::chrono::steady_clock::now()) {}
+    , window_start_(std::chrono::steady_clock::now())
+    , stall_timeout_(stall_timeout)
+    , max_recovery_attempts_(max_recovery_attempts) {}
 
 HealthMonitor::~HealthMonitor() {
     if (running_.load()) {
@@ -43,7 +47,44 @@ VoidResult HealthMonitor::start(std::shared_ptr<IGStreamerPipeline> pipeline) {
         pipeline_ = std::move(pipeline);
         restart_timestamps_.clear();
         window_start_ = std::chrono::steady_clock::now();
+
+        // Initialize frame stall detection state
+        last_frame_time_ = std::chrono::steady_clock::now();
+        last_checked_frame_count_ = 0;
+        consecutive_recovery_failures_ = 0;
     }
+    frame_counter_.store(0, std::memory_order_relaxed);
+
+    running_.store(true);
+    return OkVoid();
+}
+
+VoidResult HealthMonitor::start(std::shared_ptr<IGStreamerPipeline> pipeline,
+                                const PipelineConfig& config) {
+    if (running_.load()) {
+        return ErrVoid(ErrorCode::InvalidArgument,
+                       "HealthMonitor already running",
+                       "HealthMonitor::start");
+    }
+    if (!pipeline) {
+        return ErrVoid(ErrorCode::InvalidArgument,
+                       "Pipeline pointer is null",
+                       "HealthMonitor::start");
+    }
+
+    {
+        std::unique_lock<std::shared_mutex> lock(mutex_);
+        pipeline_ = std::move(pipeline);
+        restart_timestamps_.clear();
+        window_start_ = std::chrono::steady_clock::now();
+        saved_config_ = config;
+
+        // Initialize frame stall detection state
+        last_frame_time_ = std::chrono::steady_clock::now();
+        last_checked_frame_count_ = 0;
+        consecutive_recovery_failures_ = 0;
+    }
+    frame_counter_.store(0, std::memory_order_relaxed);
 
     running_.store(true);
     return OkVoid();
@@ -87,6 +128,110 @@ void HealthMonitor::on_error(ErrorCallback cb) {
 void HealthMonitor::on_watchdog_alert(WatchdogAlertCallback cb) {
     std::lock_guard<std::mutex> lock(callback_mutex_);
     watchdog_callback_ = std::move(cb);
+}
+
+void HealthMonitor::on_fatal_failure(FatalFailureCallback cb) {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    fatal_callback_ = std::move(cb);
+}
+
+// ============================================================
+// Frame stall detection
+// ============================================================
+
+void HealthMonitor::report_frame_produced() {
+    frame_counter_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void HealthMonitor::check_frame_stall() {
+    if (!running_.load()) {
+        return;
+    }
+
+    uint64_t current_count = frame_counter_.load(std::memory_order_relaxed);
+
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
+    if (current_count != last_checked_frame_count_) {
+        // Frames are being produced — update tracking state
+        last_checked_frame_count_ = current_count;
+        last_frame_time_ = std::chrono::steady_clock::now();
+        return;
+    }
+
+    // Frame count has NOT changed — check if stall timeout exceeded
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now - last_frame_time_);
+    auto stall_timeout_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        stall_timeout_);
+
+    if (elapsed > stall_timeout_ms) {
+        std::cerr << "[HealthMonitor] Frame stall detected: no new frames for "
+                  << (elapsed.count() / 1000) << "s (timeout=" << stall_timeout_.count()
+                  << "s). Attempting full recovery." << std::endl;
+        lock.unlock();
+        attempt_full_recovery();
+    }
+}
+
+bool HealthMonitor::attempt_full_recovery() {
+    std::unique_lock<std::shared_mutex> lock(mutex_);
+
+    if (!pipeline_) {
+        std::cerr << "[HealthMonitor] Full recovery failed: no pipeline."
+                  << std::endl;
+        return false;
+    }
+
+    std::cerr << "[HealthMonitor] Executing full recovery: stop → destroy → build → start"
+              << std::endl;
+
+    // Execute stop → destroy → build → start
+    auto stop_result = pipeline_->stop();
+    auto destroy_result = pipeline_->destroy();
+    auto build_result = pipeline_->build(saved_config_);
+    auto start_result = pipeline_->start();
+
+    if (start_result.is_ok()) {
+        consecutive_recovery_failures_ = 0;
+        last_frame_time_ = std::chrono::steady_clock::now();
+        last_checked_frame_count_ = frame_counter_.load(std::memory_order_relaxed);
+
+        // Record restart timestamp
+        restart_timestamps_.push_back(std::chrono::steady_clock::now());
+
+        std::cerr << "[HealthMonitor] Full recovery succeeded." << std::endl;
+        return true;
+    }
+
+    // Recovery failed
+    consecutive_recovery_failures_++;
+    std::cerr << "[HealthMonitor] Full recovery failed ("
+              << consecutive_recovery_failures_ << "/"
+              << max_recovery_attempts_ << ")." << std::endl;
+
+    // Record restart timestamp even on failure
+    restart_timestamps_.push_back(std::chrono::steady_clock::now());
+
+    if (consecutive_recovery_failures_ >= max_recovery_attempts_) {
+        std::string reason =
+            "Pipeline recovery failed " +
+            std::to_string(consecutive_recovery_failures_) +
+            " consecutive times. Requesting process exit.";
+        std::cerr << "[HealthMonitor] " << reason << std::endl;
+
+        lock.unlock();
+        {
+            std::lock_guard<std::mutex> cb_lock(callback_mutex_);
+            if (fatal_callback_) {
+                fatal_callback_(reason);
+            }
+        }
+        return false;
+    }
+
+    return false;
 }
 
 // ============================================================

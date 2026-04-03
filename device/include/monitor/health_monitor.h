@@ -61,9 +61,13 @@ class HealthMonitor : public IHealthMonitor {
 public:
     /// @param restart_window  fixed window duration (default 10 min)
     /// @param max_restarts    max restarts allowed in window (default 5)
+    /// @param stall_timeout   frame stall detection threshold (default 30s)
+    /// @param max_recovery_attempts  max consecutive full recovery attempts (default 3)
     explicit HealthMonitor(
         std::chrono::seconds restart_window = std::chrono::seconds(600),
-        uint32_t max_restarts = 5);
+        uint32_t max_restarts = 5,
+        std::chrono::seconds stall_timeout = std::chrono::seconds(30),
+        uint32_t max_recovery_attempts = 3);
 
     ~HealthMonitor() override;
 
@@ -89,6 +93,26 @@ public:
     /// Attempt a pipeline restart; returns false if limit reached
     bool attempt_restart();
 
+    // ---- Frame stall detection ----
+
+    /// Called by frame pull threads; atomically increments frame counter
+    void report_frame_produced();
+
+    /// Periodically checks if frame count has incremented; triggers recovery
+    /// if stalled beyond stall_timeout
+    void check_frame_stall();
+
+    /// Executes stop → destroy → rebuild → start full recovery sequence
+    bool attempt_full_recovery();
+
+    /// Fatal failure callback — notifies main when recovery fails beyond limit
+    using FatalFailureCallback = std::function<void(const std::string& reason)>;
+    void on_fatal_failure(FatalFailureCallback cb);
+
+    /// Overload: start with pipeline config saved for rebuild
+    VoidResult start(std::shared_ptr<IGStreamerPipeline> pipeline,
+                     const PipelineConfig& config);
+
     // ---- Watchdog alert callback ----
     using WatchdogAlertCallback = std::function<void(const std::string& reason)>;
     void on_watchdog_alert(WatchdogAlertCallback cb);
@@ -110,6 +134,20 @@ private:
     std::mutex callback_mutex_;
     ErrorCallback error_callback_;
     WatchdogAlertCallback watchdog_callback_;
+    FatalFailureCallback fatal_callback_;
+
+    // ---- Frame stall detection state ----
+    std::atomic<uint64_t> frame_counter_{0};
+    uint64_t last_checked_frame_count_{0};
+    std::chrono::steady_clock::time_point last_frame_time_;
+    uint32_t consecutive_recovery_failures_{0};
+
+    // ---- Frame stall configuration ----
+    std::chrono::seconds stall_timeout_{30};
+    uint32_t max_recovery_attempts_{3};
+
+    // ---- Saved config for pipeline rebuild ----
+    PipelineConfig saved_config_;
 };
 
 }  // namespace sc

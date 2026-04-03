@@ -214,8 +214,8 @@ int main(int argc, char* argv[]) {
     log_init_step("GStreamer_Pipeline");
     auto gst_pipeline = std::shared_ptr<IGStreamerPipeline>(
         create_gstreamer_pipeline().release());
+    PipelineConfig pipe_cfg;
     {
-        PipelineConfig pipe_cfg;
         pipe_cfg.source_type = config.camera_source;
         pipe_cfg.device_path = config.camera_device_path;
         pipe_cfg.video_preset = config.video_preset;
@@ -306,12 +306,18 @@ int main(int argc, char* argv[]) {
     log_init_step("Health_Monitor");
     auto health_mon = std::make_shared<HealthMonitor>();
     {
-        auto res = health_mon->start(gst_pipeline);
+        auto res = health_mon->start(gst_pipeline, pipe_cfg);
         if (res.is_err()) {
             log_mgr->log(LogLevel::WARNING, "main",
                 "Health_Monitor start failed: " + res.error().message);
         }
     }
+
+    // Register fatal failure callback — triggers shutdown when recovery fails beyond limit
+    health_mon->on_fatal_failure([&log_mgr](const std::string& reason) {
+        log_mgr->log(LogLevel::ERROR, "main", "Fatal pipeline failure: " + reason);
+        ShutdownHandler::request_shutdown();
+    });
 
     // ── 11. Watchdog ────────────────────────────────────────
     log_init_step("Watchdog");
@@ -508,7 +514,7 @@ int main(int argc, char* argv[]) {
         if (appsink && GST_IS_APP_SINK(appsink)) {
             frame_pull_running.store(true);
             frame_pull_thread = std::make_unique<std::thread>(
-                [&webrtc, &log_mgr, &frame_pull_running, appsink]() {
+                [&webrtc, &log_mgr, &frame_pull_running, &health_mon, &watchdog, appsink]() {
                     log_mgr->log(LogLevel::INFO, "main", "Frame pull thread started");
 
                     while (frame_pull_running.load() &&
@@ -525,6 +531,10 @@ int main(int argc, char* argv[]) {
                         if (!sample) {
                             continue;
                         }
+
+                        // Report frame production to health monitor and watchdog
+                        health_mon->report_frame_produced();
+                        watchdog->heartbeat("FrameProduction");
 
                         GstBuffer* buffer = gst_sample_get_buffer(sample);
                         if (buffer) {
@@ -582,7 +592,7 @@ int main(int argc, char* argv[]) {
         if (ai_appsink && GST_IS_APP_SINK(ai_appsink)) {
             ai_feed_running.store(true);
             ai_feed_thread = std::make_unique<std::thread>(
-                [&frame_pool, &log_mgr, &ai_feed_running, ai_appsink]() {
+                [&frame_pool, &log_mgr, &ai_feed_running, &health_mon, &watchdog, ai_appsink]() {
                     log_mgr->log(LogLevel::INFO, "main", "AI frame feed thread started");
                     uint64_t seq = 0;
 
@@ -599,6 +609,10 @@ int main(int argc, char* argv[]) {
                         if (buffer && caps) {
                             GstMapInfo map;
                             if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
+                                // Report frame production to health monitor and watchdog
+                                health_mon->report_frame_produced();
+                                watchdog->heartbeat("FrameProduction");
+
                                 // Get frame dimensions from caps
                                 GstStructure* s = gst_caps_get_structure(caps, 0);
                                 int width = 0, height = 0;
@@ -648,8 +662,16 @@ int main(int argc, char* argv[]) {
     // ── Main event loop ─────────────────────────────────────
     // Simple sleep loop — GStreamer pipeline runs on its own threads.
     // kvssink handles putMedia internally, no GMainLoop needed.
+    // Periodically check for frame stalls (every 5 seconds).
+    auto last_stall_check = std::chrono::steady_clock::now();
     while (!ShutdownHandler::shutdown_requested()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+        auto now = std::chrono::steady_clock::now();
+        if (now - last_stall_check >= std::chrono::seconds(5)) {
+            health_mon->check_frame_stall();
+            last_stall_check = now;
+        }
     }
 
     // ── Graceful shutdown ───────────────────────────────────

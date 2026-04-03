@@ -1,6 +1,10 @@
 #include "monitor/watchdog.h"
 
 #include <gtest/gtest.h>
+#include <rapidcheck.h>
+#include <rapidcheck/detail/TestParams.h>
+#include <rapidcheck/detail/TestMetadata.h>
+#include <rapidcheck/detail/Results.h>
 
 #include <chrono>
 #include <string>
@@ -447,6 +451,129 @@ TEST(WatchdogTest, AuthFailureResetPreventsRestart) {
         << "Reset auth failures should prevent restart";
 
     wd.stop();
+}
+
+// ============================================================
+// Property 2c: Preservation — Watchdog error rate, heartbeat
+// staleness, and memory limit detection behavior is consistent
+// Validates: Requirements 3.3
+//
+// For any module name and error count, Watchdog's existing
+// detection mechanisms behave consistently with pre-fix behavior.
+// ============================================================
+
+// 2c-i: Error count tracking in sliding window
+TEST(WatchdogPreservation, ErrorCountTrackedCorrectlyInSlidingWindow) {
+    rc::detail::TestParams params;
+    params.maxSuccess = 20;
+    rc::detail::TestMetadata metadata;
+    metadata.id = "ErrorCountTrackedCorrectlyInSlidingWindow";
+    auto result = rc::detail::checkTestable([]() {
+        const auto name_len = *rc::gen::inRange(1, 11);
+        auto module_name = *rc::gen::container<std::string>(
+            name_len, rc::gen::oneOf(
+                rc::gen::inRange('a', static_cast<char>('z' + 1)),
+                rc::gen::inRange('0', static_cast<char>('9' + 1))));
+        RC_PRE(!module_name.empty());
+
+        const auto error_count = *rc::gen::inRange(1, 51);
+
+        WatchdogConfig cfg;
+        cfg.error_window = std::chrono::seconds(300);
+        cfg.error_threshold_per_min = 100;
+        cfg.stale_timeout = std::chrono::seconds(600);
+        cfg.memory_limit_bytes = 1024ULL * 1024 * 1024;
+        cfg.protection_window = std::chrono::seconds(3600);
+        cfg.max_process_restarts = 3;
+
+        Watchdog wd(cfg);
+        wd.start();
+        wd.heartbeat(module_name);
+
+        for (int i = 0; i < error_count; ++i) {
+            wd.report_error(module_name);
+        }
+
+        RC_ASSERT(wd.error_count(module_name) == static_cast<uint32_t>(error_count));
+        wd.stop();
+    }, metadata, params);
+    ASSERT_TRUE(result.template is<rc::detail::SuccessResult>());
+}
+
+// 2c-ii: Stale heartbeat triggers restart callback
+TEST(WatchdogPreservation, StaleHeartbeatTriggersRestartCallback) {
+    rc::detail::TestParams params;
+    params.maxSuccess = 20;
+    rc::detail::TestMetadata metadata;
+    metadata.id = "StaleHeartbeatTriggersRestartCallback";
+    auto result = rc::detail::checkTestable([]() {
+        const auto name_len = *rc::gen::inRange(1, 11);
+        auto module_name = *rc::gen::container<std::string>(
+            name_len, rc::gen::oneOf(
+                rc::gen::inRange('a', static_cast<char>('z' + 1)),
+                rc::gen::inRange('0', static_cast<char>('9' + 1))));
+        RC_PRE(!module_name.empty());
+
+        WatchdogConfig cfg;
+        cfg.stale_timeout = std::chrono::seconds(0);
+        cfg.error_window = std::chrono::seconds(300);
+        cfg.error_threshold_per_min = 100;
+        cfg.memory_limit_bytes = 1024ULL * 1024 * 1024;
+        cfg.protection_window = std::chrono::seconds(3600);
+        cfg.max_process_restarts = 3;
+
+        Watchdog wd(cfg);
+        wd.start();
+
+        wd.heartbeat(module_name);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+        std::string restarted_module;
+        wd.on_restart_request([&](const std::string& mod, const std::string&) {
+            restarted_module = mod;
+        });
+
+        wd.check_modules();
+        RC_ASSERT(restarted_module == module_name);
+        wd.stop();
+    }, metadata, params);
+    ASSERT_TRUE(result.template is<rc::detail::SuccessResult>());
+}
+
+// 2c-iii: No "FrameProduction" module in snapshot
+TEST(WatchdogPreservation, NoFrameProductionModuleInSnapshot) {
+    rc::detail::TestParams params;
+    params.maxSuccess = 20;
+    rc::detail::TestMetadata metadata;
+    metadata.id = "NoFrameProductionModuleInSnapshot";
+    auto result = rc::detail::checkTestable([]() {
+        const auto name_len = *rc::gen::inRange(1, 11);
+        auto module_name = *rc::gen::container<std::string>(
+            name_len, rc::gen::oneOf(
+                rc::gen::inRange('a', static_cast<char>('z' + 1)),
+                rc::gen::inRange('0', static_cast<char>('9' + 1))));
+        RC_PRE(!module_name.empty());
+        RC_PRE(module_name != "FrameProduction");
+
+        WatchdogConfig cfg;
+        cfg.error_window = std::chrono::seconds(300);
+        cfg.error_threshold_per_min = 100;
+        cfg.stale_timeout = std::chrono::seconds(600);
+        cfg.memory_limit_bytes = 1024ULL * 1024 * 1024;
+        cfg.protection_window = std::chrono::seconds(3600);
+        cfg.max_process_restarts = 3;
+
+        Watchdog wd(cfg);
+        wd.start();
+        wd.heartbeat(module_name);
+
+        auto snapshot = wd.module_health_snapshot();
+        for (const auto& health : snapshot) {
+            RC_ASSERT(health.module_name != "FrameProduction");
+        }
+        wd.stop();
+    }, metadata, params);
+    ASSERT_TRUE(result.template is<rc::detail::SuccessResult>());
 }
 
 }  // namespace

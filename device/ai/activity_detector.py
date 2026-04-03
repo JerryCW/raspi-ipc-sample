@@ -196,12 +196,20 @@ class ActivityDetector:
                 if conf < threshold:
                     continue
 
+                # For bird detections, crop the bbox region so the cloud
+                # classifier receives a bird close-up instead of the full
+                # frame.  Non-bird classes keep the full frame for context.
+                if cls_name == "bird":
+                    screenshot_frame = self._crop_bbox(frame, boxes.xyxy[i])
+                else:
+                    screenshot_frame = frame
+
                 # Disk protection: skip new session creation when limits exceeded
                 if not files_ok or not disk_ok:
                     # Still update existing sessions, but don't create new ones
                     active = self.session_mgr.get_active_sessions()
                     if cls_name in active:
-                        self.session_mgr.on_detection(cls_name, conf, timestamp_ms, frame)
+                        self.session_mgr.on_detection(cls_name, conf, timestamp_ms, screenshot_frame)
                     else:
                         if not files_ok:
                             logger.warning("File count exceeds %d — not creating new session", self.config.capture_max_files)
@@ -209,7 +217,7 @@ class ActivityDetector:
                             logger.warning("Disk free space below %dMB — not saving screenshots", self.config.disk_min_free_mb)
                     continue
 
-                self.session_mgr.on_detection(cls_name, conf, timestamp_ms, frame)
+                self.session_mgr.on_detection(cls_name, conf, timestamp_ms, screenshot_frame)
 
         # Per-frame log: model + inference time + detections
         model_name = getattr(self.model, "model_name", "unknown")
@@ -231,6 +239,42 @@ class ActivityDetector:
                 (session.end_time_ms - session.start_time_ms) / 1000.0,
                 session.detection_count,
             )
+
+    # ------------------------------------------------------------------
+    # Bbox cropping
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _crop_bbox(frame: np.ndarray, xyxy) -> np.ndarray:
+        """Crop a bounding box region from the frame with 10% padding.
+
+        Args:
+            frame: Full BGR frame (H, W, 3).
+            xyxy: Tensor or array with [x1, y1, x2, y2] coordinates.
+
+        Returns:
+            Cropped region as a new numpy array. Falls back to the full
+            frame if the crop would be too small (< 32px on either side).
+        """
+        h, w = frame.shape[:2]
+        x1, y1, x2, y2 = (
+            int(xyxy[0].item()), int(xyxy[1].item()),
+            int(xyxy[2].item()), int(xyxy[3].item()),
+        )
+
+        # Add 10% padding around the bbox for context
+        bw, bh = x2 - x1, y2 - y1
+        pad_x, pad_y = int(bw * 0.1), int(bh * 0.1)
+        x1 = max(0, x1 - pad_x)
+        y1 = max(0, y1 - pad_y)
+        x2 = min(w, x2 + pad_x)
+        y2 = min(h, y2 + pad_y)
+
+        # Skip crop if result would be too small
+        if (x2 - x1) < 32 or (y2 - y1) < 32:
+            return frame
+
+        return frame[y1:y2, x1:x2].copy()
 
     # ------------------------------------------------------------------
     # Screenshot / metadata I/O

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""SageMaker deployment script for Birds-Classifier-EfficientNetB2.
+"""SageMaker deployment script for BioCLIP bird species classifier.
 
 Steps:
-  1. Download HuggingFace model `dennisjooo/Birds-Classifier-EfficientNetB2`
-  2. Package as model.tar.gz (model weights + inference.py + requirements.txt)
+  1. Download HuggingFace model `imageomics/bioclip`
+  2. Package as model.tar.gz (model weights + inference.py + requirements.txt + bird_labels.json)
   3. Upload to s3://smart-camera-captures/models/bird-classifier/model.tar.gz
   4. Create SageMaker Model → EndpointConfig (Serverless) → Endpoint
   5. Register model version in SageMaker Model Registry
@@ -31,7 +31,7 @@ from huggingface_hub import snapshot_download
 # Configuration
 # ---------------------------------------------------------------------------
 REGION = "ap-southeast-1"
-HF_MODEL_ID = "dennisjooo/Birds-Classifier-EfficientNetB2"
+HF_MODEL_ID = "imageomics/bioclip"
 
 S3_BUCKET = "smart-camera-captures"
 S3_MODEL_KEY = "models/bird-classifier/model.tar.gz"
@@ -42,7 +42,7 @@ ENDPOINT_CONFIG_NAME = "bird-classifier-config"
 ENDPOINT_NAME = "bird-classifier-endpoint"
 
 # Serverless inference settings
-SERVERLESS_MEMORY_MB = 2048
+SERVERLESS_MEMORY_MB = 4096
 SERVERLESS_MAX_CONCURRENCY = 5
 
 # Model Registry
@@ -126,6 +126,11 @@ def package_model(model_dir: str, work_dir: str) -> str:
         requirements_path = os.path.join(script_dir, "requirements.txt")
         tar.add(requirements_path, arcname="code/requirements.txt")
         print("       + code/requirements.txt")
+
+        # Add bird labels
+        labels_path = os.path.join(script_dir, "bird_labels.json")
+        tar.add(labels_path, arcname="bird_labels.json")
+        print("       + bird_labels.json")
 
     size_mb = os.path.getsize(tar_path) / (1024 * 1024)
     print(f"       Archive size: {size_mb:.1f} MB")
@@ -242,7 +247,7 @@ def register_model_version(s3_uri: str, role_arn: str) -> str:
     try:
         sm_client.create_model_package_group(
             ModelPackageGroupName=MODEL_PACKAGE_GROUP_NAME,
-            ModelPackageGroupDescription="Bird species classifier models (EfficientNetB2)",
+            ModelPackageGroupDescription="Bird species classifier models (BioCLIP)",
         )
         print(f"       Created model package group '{MODEL_PACKAGE_GROUP_NAME}'")
     except sm_client.exceptions.ClientError as e:
@@ -254,8 +259,8 @@ def register_model_version(s3_uri: str, role_arn: str) -> str:
     response = sm_client.create_model_package(
         ModelPackageGroupName=MODEL_PACKAGE_GROUP_NAME,
         ModelPackageDescription=(
-            f"EfficientNetB2 bird classifier from HuggingFace ({HF_MODEL_ID}). "
-            f"525 bird species, Serverless Inference."
+            f"BioCLIP zero-shot bird classifier from HuggingFace ({HF_MODEL_ID}). "
+            f"Open-vocabulary species recognition, Serverless Inference."
         ),
         InferenceSpecification={
             "Containers": [

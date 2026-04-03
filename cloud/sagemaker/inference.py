@@ -70,22 +70,36 @@ def model_fn(model_dir: str) -> dict:
     prompt_template = labels_data.get(
         "prompt_template", "a photo of a {species}, a type of bird"
     )
-    logger.info("Loaded %d bird species labels", len(species_list))
 
-    # Pre-compute normalized text embeddings for all species
-    prompts = [prompt_template.format(species=s) for s in species_list]
-    tokens = tokenizer(prompts).to(device)
+    # Negative classes: non-bird categories for active OOD rejection
+    negative_classes = labels_data.get("negative_classes", [])
+    negative_prompt_template = labels_data.get(
+        "negative_prompt_template", "a photo of a {class_name}"
+    )
+    num_bird_species = len(species_list)
+    logger.info("Loaded %d bird species + %d negative classes", num_bird_species, len(negative_classes))
+
+    # Build combined label list: bird species first, then negative classes
+    all_labels = species_list + [f"NOT_BIRD:{nc}" for nc in negative_classes]
+
+    # Pre-compute normalized text embeddings for all labels
+    bird_prompts = [prompt_template.format(species=s) for s in species_list]
+    neg_prompts = [negative_prompt_template.format(class_name=nc) for nc in negative_classes]
+    all_prompts = bird_prompts + neg_prompts
+
+    tokens = tokenizer(all_prompts).to(device)
     with torch.no_grad():
         text_features = model.encode_text(tokens)
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
 
-    logger.info("Model loaded on %s, text embeddings cached (%d species)", device, len(species_list))
+    logger.info("Model loaded on %s, text embeddings cached (%d total)", device, len(all_labels))
     return {
         "model": model,
         "preprocess": preprocess,
         "tokenizer": tokenizer,
         "text_features": text_features,
-        "label_list": species_list,
+        "label_list": all_labels,
+        "num_bird_species": num_bird_species,
         "device": device,
     }
 
@@ -125,6 +139,7 @@ def predict_fn(input_data: Image.Image, model_dict: dict) -> list[dict]:
     preprocess = model_dict["preprocess"]
     text_features = model_dict["text_features"]
     label_list = model_dict["label_list"]
+    num_bird_species = model_dict["num_bird_species"]
     device = model_dict["device"]
 
     # Preprocess image using BioCLIP transform
@@ -140,7 +155,7 @@ def predict_fn(input_data: Image.Image, model_dict: dict) -> list[dict]:
 
         max_sim = similarities.max().item()
 
-        # OOD detection
+        # OOD detection (threshold-based fallback)
         if max_sim < OOD_SIMILARITY_THRESHOLD:
             logger.info(
                 "OOD detected: max_similarity=%.4f < threshold=%.4f — not a bird",
@@ -152,11 +167,27 @@ def predict_fn(input_data: Image.Image, model_dict: dict) -> list[dict]:
                 "similarity_score": round(max_sim, 4),
             }]
 
-        # Scale similarities and apply softmax for confidence scores
-        scaled = similarities * 100.0
+        # Negative class rejection: if top-1 overall is a negative class,
+        # the image is not a bird (e.g. person, cat, dog)
+        top1_idx = similarities.argmax().item()
+        if top1_idx >= num_bird_species:
+            neg_label = label_list[top1_idx]  # e.g. "NOT_BIRD:person"
+            logger.info(
+                "Negative class detected: %s (similarity=%.4f) — not a bird",
+                neg_label, similarities[top1_idx].item(),
+            )
+            return [{
+                "species": "not_a_bird",
+                "confidence": 0.0,
+                "similarity_score": round(similarities[top1_idx].item(), 4),
+            }]
+
+        # Scale bird-only similarities and apply softmax for confidence scores
+        bird_similarities = similarities[:num_bird_species]
+        scaled = bird_similarities * 100.0
         probabilities = torch.nn.functional.softmax(scaled, dim=0)
 
-    # Top-3
+    # Top-3 from bird species only
     top3_probs, top3_indices = torch.topk(
         probabilities, k=min(3, probabilities.shape[0])
     )

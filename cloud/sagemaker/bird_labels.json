@@ -306,5 +306,28 @@
     "Tree Pipit",
     "Red-backed Shrike",
     "Great Grey Shrike"
-  ]
+  ],
+  "negative_classes": [
+    "person",
+    "cat",
+    "dog",
+    "car",
+    "bicycle",
+    "motorcycle",
+    "squirrel",
+    "rat",
+    "snake",
+    "lizard",
+    "frog",
+    "fish",
+    "insect",
+    "butterfly",
+    "spider",
+    "tree trunk",
+    "leaf",
+    "flower",
+    "rock",
+    "building"
+  ],
+  "negative_prompt_template": "a photo of a {class_name}"
 }

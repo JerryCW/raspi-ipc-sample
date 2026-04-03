@@ -27,6 +27,12 @@ INPUT_SIZE = (3, 260, 260)
 IMAGE_MEAN = [0.485, 0.456, 0.406]
 IMAGE_STD = [0.47853944, 0.4732864, 0.47434163]
 
+# OOD (Out-of-Distribution) detection threshold.
+# For in-distribution bird images, the max logit before softmax is typically >10.
+# For non-bird inputs (person, cat, dog, background), max logit is usually <8.
+# Inputs below this threshold are rejected as "not_a_bird".
+OOD_LOGIT_THRESHOLD = 8.0
+
 
 def model_fn(model_dir: str) -> dict:
     """Load EfficientNetB2 model and label mapping from model_dir.
@@ -180,6 +186,22 @@ def predict_fn(input_data: Image.Image, model_dict: dict) -> list[dict]:
     # Inference
     with torch.no_grad():
         logits = model(tensor)
+
+        # OOD detection: check max logit before softmax.
+        # Bird images produce high max logits (>10); non-bird inputs (person,
+        # cat, dog, background) produce low, spread-out logits (<8).
+        max_logit = logits.max().item()
+        if max_logit < OOD_LOGIT_THRESHOLD:
+            logger.info(
+                "OOD detected: max_logit=%.2f < threshold=%.1f — not a bird",
+                max_logit, OOD_LOGIT_THRESHOLD,
+            )
+            return [{
+                "species": "not_a_bird",
+                "confidence": 0.0,
+                "max_logit": round(max_logit, 4),
+            }]
+
         probabilities = torch.nn.functional.softmax(logits, dim=1)
 
     # Top-3
@@ -194,14 +216,19 @@ def predict_fn(input_data: Image.Image, model_dict: dict) -> list[dict]:
         })
 
     logger.info(
-        "Prediction: top-1=%s (%.4f), top-2=%s (%.4f), top-3=%s (%.4f)",
+        "Prediction: top-1=%s (%.4f), top-2=%s (%.4f), top-3=%s (%.4f), max_logit=%.2f",
         predictions[0]["species"] if len(predictions) > 0 else "N/A",
         predictions[0]["confidence"] if len(predictions) > 0 else 0,
         predictions[1]["species"] if len(predictions) > 1 else "N/A",
         predictions[1]["confidence"] if len(predictions) > 1 else 0,
         predictions[2]["species"] if len(predictions) > 2 else "N/A",
         predictions[2]["confidence"] if len(predictions) > 2 else 0,
+        max_logit,
     )
+
+    # Include max_logit in response for debugging/calibration
+    for p in predictions:
+        p["max_logit"] = round(max_logit, 4)
 
     return predictions
 

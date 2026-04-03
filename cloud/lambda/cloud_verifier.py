@@ -121,12 +121,21 @@ def _process_event(
     # Derive the S3 prefix from the metadata key (same directory)
     s3_prefix = metadata_key.rsplit("/", 1)[0] + "/"
 
-    # 2. Always try SageMaker bird classification first, regardless of primary_class.
-    # YOLO's low accuracy may misclassify birds as person/dog, so we let the
-    # cloud model decide. If SageMaker identifies a bird, we override primary_class.
-    if candidates:
+    # 2. Always run SageMaker bird classification, regardless of primary_class.
+    # YOLO's low confidence threshold means it may misclassify birds as
+    # person/dog/cat. We let the cloud model decide for ALL events.
+    # If no candidate screenshots exist, fall back to the start screenshot.
+    images_for_sagemaker = list(candidates) if candidates else []
+    if not images_for_sagemaker:
+        # Use start screenshot as fallback input for SageMaker
+        start_filename = metadata.get("start_screenshot_filename", "")
+        if start_filename:
+            images_for_sagemaker = [start_filename]
+            logger.info("No candidates, using start screenshot for SageMaker: %s", start_filename)
+
+    if images_for_sagemaker:
         verification = verify_bird(
-            s3_client, sagemaker_client, bucket, s3_prefix, candidates, metadata,
+            s3_client, sagemaker_client, bucket, s3_prefix, images_for_sagemaker, metadata,
         )
         if verification["verification_status"] == "verified" and verification.get("bird_species"):
             # SageMaker found a bird — override primary_class
@@ -144,13 +153,13 @@ def _process_event(
             }
             logger.info("SageMaker rejected bird, using YOLO class=%s as verified", primary_class)
     else:
-        # No candidate screenshots — just verify with YOLO's class
+        # No screenshots at all — verify with YOLO's class only
         verification = {
             "verification_status": "verified",
             "pipeline_stage": "cloud_verified",
             "verification_fallback": False,
         }
-        logger.info("No candidates, direct verify for class=%s", primary_class)
+        logger.info("No screenshots available, direct verify for class=%s", primary_class)
 
     elapsed_ms = int((time.time() - start_time) * 1000)
     verification_status = verification["verification_status"]

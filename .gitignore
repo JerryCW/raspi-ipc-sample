@@ -20,3 +20,13 @@ __pycache__/
 .hypothesis/
 device/.cache/
 cloud/__pycache__/
+
+# Training data & checkpoints (large files, stored in S3)
+cloud/sagemaker/training/data/
+cloud/sagemaker/training/checkpoints/
+
+
+# Test images and model weights (local only)
+*.pt
+bird-*.jpg
+person-*.jpg

@@ -2,6 +2,7 @@
   "prompt_template": "a photo of a {species}, a type of bird",
   "species": [
     "White-cheeked Starling",
+    "Red-billed Starling",
     "Japanese White-eye",
     "Oriental Magpie-Robin",
     "Eurasian Tree Sparrow",

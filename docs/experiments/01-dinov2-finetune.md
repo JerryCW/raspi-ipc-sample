@@ -575,12 +575,12 @@ S3 路径：`s3://smart-camera-captures/training-data/birds-cleaned/`
 
 ### 对比 BioCLIP 零样本
 
-| 测试图片 | BioCLIP 零样本 | DINOv2 基线 | DINOv2 original-300 | DINOv2 cropped-300 |
-|----------|---------------|------------|--------------------|--------------------|
-| bird-cropped.jpg | Eurasian Jay 33%（错误） | 丝光椋鸟 67.5% ✅ | 丝光椋鸟 65.9% ✅ | 丝光椋鸟 81.2% ✅ |
-| bird-sample.jpg | — | 白头鹎 21.7% ❌ | 丝光椋鸟 18.9% ✅ | 丝光椋鸟 68.2% ✅ |
-| bird-sample2.jpg | — | — | 乌鸫 76.9% ✅ | 乌鸫 66.8% ✅ |
-| person-sample.jpg | not_a_bird ✅ | 非鸟类 ✅ | — | — |
+| 测试图片 | BioCLIP 零样本 | DINOv2 基线 | DINOv2 original-300 | DINOv2 cropped-300 | DINOv2 full-ft-cropped |
+|----------|---------------|------------|--------------------|--------------------|----------------------|
+| bird-cropped.jpg | Eurasian Jay 33%（错误） | 丝光椋鸟 67.5% ✅ | 丝光椋鸟 65.9% ✅ | 丝光椋鸟 81.2% ✅ | 丝光椋鸟 62.5% ✅ |
+| bird-sample.jpg | — | 白头鹎 21.7% ❌ | 丝光椋鸟 18.9% ✅ | 丝光椋鸟 68.2% ✅ | 丝光椋鸟 23.5% ✅ |
+| bird-sample2.jpg | — | — | 乌鸫 76.9% ✅ | 乌鸫 66.8% ✅ | 乌鸫 83.6% ✅ |
+| person-sample.jpg | not_a_bird ✅ | 非鸟类 ✅ | — | — | 非鸟类 ✅ |
 
 ### 结论
 
@@ -625,8 +625,8 @@ DINOv2 冻结 backbone 实验总结：
 | 0 | 基线：未清洗原图 150张/种，冻结backbone | 94.0% | ✅ 丝光椋鸟 67.5% | ❌ 白头鹎 21.7% | — |
 | 1 | original-300：清洗后原图，冻结backbone | 98.85% | ✅ 丝光椋鸟 65.9% | ✅ 丝光椋鸟 18.9% | ✅ 乌鸫 76.9% |
 | 2 | cropped-300：清洗后裁剪图，冻结backbone | 97.96% | ✅ 丝光椋鸟 81.2% | ✅ 丝光椋鸟 68.2% | ✅ 乌鸫 66.8% |
-| 3 | full-ft-original：清洗后原图，full fine-tune | 训练中 | — | — | — |
-| 4 | full-ft-cropped：清洗后裁剪图，full fine-tune | 训练中 | — | — | — |
+| 3 | full-ft-original：清洗后原图，full fine-tune | 待测试 | — | — | — |
+| 4 | full-ft-cropped：清洗后裁剪图，full fine-tune | 98.0% | ✅ 丝光椋鸟 62.5% | ✅ 丝光椋鸟 23.5% | ✅ 乌鸫 83.6% |
 
 ### 关键发现
 
@@ -637,4 +637,65 @@ DINOv2 冻结 backbone 实验总结：
 
 ### 实验 3/4 说明
 
-Full fine-tune 使用 us-east-1 的 p3.2xlarge（V100 16GB），因 DINOv2-ViT-L 全参数训练显存需求大，batch_size 从 8 降为 2，配合 gradient accumulation 4 步（等效 batch=8）。训练中。
+Full fine-tune 使用 us-east-1 的 p3.2xlarge（V100 16GB），因 DINOv2-ViT-L 全参数训练显存需求大，batch_size 从 8 降为 2，配合 gradient accumulation 4 步（等效 batch=8）。
+
+### 实验 4 结果（full-ft-cropped）
+
+- 训练 Job：`dinov2-full-ft-cropped-1775316758`，p3.2xlarge，训练时间 ~12h（43270s）
+- Best val accuracy: 98.0%（Epoch 3），Train acc: 99.2%
+
+#### bird-cropped.jpg（丝光椋鸟裁剪图）
+
+| 排名 | 物种 | 属 | 置信度 |
+|------|------|-----|--------|
+| 1 | 丝光椋鸟 | 椋鸟属 | 62.5% ✓ |
+| 2 | 灰椋鸟 | 椋鸟属 | 4.8% |
+| 3 | 灰喜鹊 | 灰喜鹊属 | 2.9% |
+| 4 | 红嘴蓝鹊 | 蓝鹊属 | 2.1% |
+| 5 | 小䴙䴘 | 䴙䴘属 | 2.0% |
+
+#### bird-sample.jpg（丝光椋鸟原图）
+
+| 排名 | 物种 | 属 | 置信度 |
+|------|------|-----|--------|
+| 1 | 丝光椋鸟 | 椋鸟属 | 23.5% ✓ |
+| 2 | 白头鹎 | 鹎属 | 6.7% |
+| 3 | 红嘴蓝鹊 | 蓝鹊属 | 4.5% |
+| 4 | 灰喜鹊 | 灰喜鹊属 | 3.8% |
+| 5 | 暗绿绣眼鸟 | 绣眼鸟属 | 3.6% |
+
+#### bird-sample2.jpg（乌鸫近距离）
+
+| 排名 | 物种 | 属 | 置信度 |
+|------|------|-----|--------|
+| 1 | 乌鸫 | 鸫属 | 83.6% ✓ |
+| 2 | 家八哥 | 八哥属 | 1.8% |
+| 3 | 灰椋鸟 | 椋鸟属 | 1.8% |
+
+#### person-sample.jpg → 非鸟类（top-1 置信度 4.3% < 20% 阈值）✓
+
+### 关键发现（更新）
+
+5. **full fine-tune 未带来整体提升**（实验 2 vs 4）：val acc 基本持平（97.96% vs 98.0%），但实际测试图上 full fine-tune 反而退步：
+   - bird-cropped.jpg: 81.2% → 62.5%（↓18.7%）
+   - bird-sample.jpg: 68.2% → 23.5%（↓44.7%）
+   - bird-sample2.jpg: 66.8% → 83.6%（↑16.8%，近距离特写提升）
+6. **full fine-tune 的问题分析**：解冻 backbone 后模型在近距离特写上更强（乌鸫 83.6%），但在复杂背景/远距离场景上严重退步。可能原因：
+   - 5 epoch 对 3 亿参数的 backbone 不够充分
+   - batch_size=2 导致梯度估计不稳定
+   - 裁剪训练数据 + full fine-tune 可能让 backbone 过度适应"干净"的鸟类特写，丧失了对复杂背景的鲁棒性
+
+### 最终结论
+
+**cropped-300（冻结 backbone）是最佳模型**，将用于 SageMaker 部署。
+
+| 维度 | cropped-300 (冻结) | full-ft-cropped |
+|------|-------------------|-----------------|
+| Val Acc | 97.96% | 98.0% |
+| 裁剪图（端侧 bbox） | 81.2% | 62.5% |
+| 原图（复杂背景） | 68.2% | 23.5% |
+| 近距离特写 | 66.8% | 83.6% |
+| 训练时间 | ~5 分钟 | ~12 小时 |
+| 训练成本 | ~$0.06 | ~$36 |
+
+冻结 backbone 在实际部署场景（端侧 YOLO bbox 裁剪图）上表现最好，且训练成本低 600 倍。

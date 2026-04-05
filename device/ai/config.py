@@ -43,6 +43,10 @@ class DetectorConfig:
     # Event deduplication params
     dedup_window_sec: int = 30
 
+    # Confirmation window params
+    confirmation_window_size: int = 3
+    confirmation_min_count: int = 2
+
     # S3 Uploader params
     s3_bucket: str = "smart-camera-captures"
     s3_prefix: str = "captures"

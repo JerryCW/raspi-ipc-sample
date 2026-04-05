@@ -19,6 +19,7 @@ import cv2
 import numpy as np
 
 from device.ai.config import DetectorConfig
+from device.ai.confirmation import DetectionConfirmationWindow
 from device.ai.ipc_client import IPCClient
 from device.ai.session import SessionManager
 
@@ -64,15 +65,23 @@ class ActivityDetector:
             save_metadata=self._save_metadata,
         )
 
+        self.confirmation_window = DetectionConfirmationWindow(
+            window_size=config.confirmation_window_size,
+            min_count=config.confirmation_min_count,
+        )
+
         # Startup log (req 2.10)
         model_info = getattr(self.model, "model_name", "yolov8n")
         logger.info(
             "ActivityDetector started — model=%s, classes=%s, "
-            "confidence=%.2f, session_timeout=%ds",
+            "confidence=%.2f, session_timeout=%ds, "
+            "confirmation_window=%d/%d",
             model_info,
             self.config.detect_classes,
             self.config.confidence_threshold,
             self.config.session_timeout_sec,
+            config.confirmation_window_size,
+            config.confirmation_min_count,
         )
 
     # ------------------------------------------------------------------
@@ -156,7 +165,14 @@ class ActivityDetector:
     # ------------------------------------------------------------------
 
     def process_frame(self, frame: np.ndarray, timestamp_ms: int) -> None:
-        """Run YOLO inference on a single frame and update sessions."""
+        """Run YOLO inference on a single frame and update sessions.
+
+        Two-pass approach:
+        1. Collect all detections that pass confidence threshold into
+           frame_classes / frame_confidences / frame_screenshots.
+        2. Push frame_classes into the confirmation window, then only
+           call session_mgr.on_detection() for confirmed classes.
+        """
         import time as _time
         t0 = _time.monotonic()
 
@@ -168,12 +184,11 @@ class ActivityDetector:
 
         inference_ms = (_time.monotonic() - t0) * 1000
 
-        # Collect detections for debug logging
-        detections = []
-
-        # Check disk protection before processing detections
-        disk_ok = self._disk_space_ok()
-        files_ok = self._file_count_ok()
+        # --- First pass: collect per-frame detections -----------------
+        detections: list[str] = []                    # raw log strings
+        frame_classes: set[str] = set()               # classes passing threshold
+        frame_confidences: dict[str, float] = {}      # highest conf per class
+        frame_screenshots: dict[str, np.ndarray] = {} # screenshot per class
 
         for result in results:
             boxes = result.boxes
@@ -196,35 +211,67 @@ class ActivityDetector:
                 if conf < threshold:
                     continue
 
-                # For bird detections, crop the bbox region so the cloud
-                # classifier receives a bird close-up instead of the full
-                # frame.  Non-bird classes keep the full frame for context.
-                if cls_name == "bird":
-                    screenshot_frame = self._crop_bbox(frame, boxes.xyxy[i])
-                else:
-                    screenshot_frame = frame
+                frame_classes.add(cls_name)
 
-                # Disk protection: skip new session creation when limits exceeded
-                if not files_ok or not disk_ok:
-                    # Still update existing sessions, but don't create new ones
-                    active = self.session_mgr.get_active_sessions()
-                    if cls_name in active:
-                        self.session_mgr.on_detection(cls_name, conf, timestamp_ms, screenshot_frame)
+                # Keep highest confidence per class
+                if cls_name not in frame_confidences or conf > frame_confidences[cls_name]:
+                    frame_confidences[cls_name] = conf
+                    # For bird detections, crop the bbox region so the cloud
+                    # classifier receives a bird close-up instead of the full
+                    # frame.  Non-bird classes keep the full frame for context.
+                    if cls_name == "bird":
+                        frame_screenshots[cls_name] = self._crop_bbox(frame, boxes.xyxy[i])
                     else:
-                        if not files_ok:
-                            logger.warning("File count exceeds %d — not creating new session", self.config.capture_max_files)
-                        if not disk_ok:
-                            logger.warning("Disk free space below %dMB — not saving screenshots", self.config.disk_min_free_mb)
-                    continue
+                        frame_screenshots[cls_name] = frame
 
-                self.session_mgr.on_detection(cls_name, conf, timestamp_ms, screenshot_frame)
-
-        # Per-frame log: model + inference time + detections
+        # Per-frame log: model + inference time + detections (before confirmation)
         model_name = getattr(self.model, "model_name", "unknown")
         if detections:
             logger.info("[%s] Frame ts=%d infer=%.0fms: %s", model_name, timestamp_ms, inference_ms, ", ".join(detections))
         else:
             logger.debug("[%s] Frame ts=%d infer=%.0fms: no targets", model_name, timestamp_ms, inference_ms)
+
+        # --- Confirmation window --------------------------------------
+        confirmed = self.confirmation_window.push_frame(frame_classes)
+
+        # Log confirmed / pending status
+        for cls_name in frame_classes:
+            count = self.confirmation_window.get_count(cls_name)
+            ws = self.confirmation_window.window_size
+            if cls_name in confirmed:
+                logger.info("%s confirmed: %d/%d frames", cls_name, count, ws)
+            else:
+                logger.debug("%s pending: %d/%d frames", cls_name, count, ws)
+
+        # --- Second pass: dispatch confirmed detections ---------------
+        # Check disk protection before dispatching
+        disk_ok = self._disk_space_ok()
+        files_ok = self._file_count_ok()
+
+        for cls_name in confirmed:
+            conf = frame_confidences.get(cls_name)
+            screenshot_frame = frame_screenshots.get(cls_name)
+
+            # A confirmed class may not be in the current frame (it was
+            # confirmed by historical window counts).  Only dispatch if
+            # the class was actually detected in this frame.
+            if conf is None or screenshot_frame is None:
+                continue
+
+            # Disk protection: skip new session creation when limits exceeded
+            if not files_ok or not disk_ok:
+                # Still update existing sessions, but don't create new ones
+                active = self.session_mgr.get_active_sessions()
+                if cls_name in active:
+                    self.session_mgr.on_detection(cls_name, conf, timestamp_ms, screenshot_frame)
+                else:
+                    if not files_ok:
+                        logger.warning("File count exceeds %d — not creating new session", self.config.capture_max_files)
+                    if not disk_ok:
+                        logger.warning("Disk free space below %dMB — not saving screenshots", self.config.disk_min_free_mb)
+                continue
+
+            self.session_mgr.on_detection(cls_name, conf, timestamp_ms, screenshot_frame)
 
         # Check for timed-out sessions
         self.check_session_timeouts(timestamp_ms)

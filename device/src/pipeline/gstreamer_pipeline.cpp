@@ -128,8 +128,12 @@ VoidResult GStreamerPipeline::select_encoder(std::string& pipeline_desc) const {
         gst_object_unref(sw_factory);
         uint32_t gop = config_.gop_size > 0 ? config_.gop_size
                                              : config_.video_preset.fps;
+        // threads=2: 限制编码线程数，避免 x264 自动开 4-8 个线程
+        // 抢占全部核心。720p@15fps ultrafast 下 2 线程足够，
+        // 把剩余核心留给解码、AI、系统调度，减少上下文切换开销
         pipeline_desc =
             "x264enc speed-preset=ultrafast tune=zerolatency "
+            "threads=2 "
             "bitrate=" + std::to_string(config_.video_preset.bitrate_kbps) +
             " key-int-max=" + std::to_string(gop) +
             " bframes=0";

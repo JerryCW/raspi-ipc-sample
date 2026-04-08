@@ -178,24 +178,27 @@ std::string GStreamerPipeline::build_pipeline_description(
        << ",framerate=" << config.video_preset.fps << "/1"
        << ",pixel-aspect-ratio=1/1";
 
-    // Tee raw video to multiple branches — each branch encodes independently
-    ss << " ! tee name=t";
+    // 两级 Tee 架构：
+    //   raw_t (raw video) → 编码链 + AI 分支
+    //   h264_t (H.264)    → KVS + WebRTC
+    // 编码器只实例化一次，KVS 和 WebRTC 共享同一份 H.264 码流
+    ss << " ! tee name=raw_t";
 
-    // ── KVS branch: encode → h264parse → kvssink ──
-    // kvssink handles byte-stream H.264 directly (no avc conversion needed).
-    // iot-certificate is set inline using GstStructure serialization format —
-    // this works with gst_parse_launch (proven by gst-launch-1.0 testing).
+    // ── 编码链：encode once → h264parse → tee(h264) ──
+    ss << " raw_t. ! queue max-size-buffers=3 leaky=downstream"
+       << " ! " << encoder_desc
+       << " ! h264parse config-interval=-1"
+       << " ! tee name=h264_t";
+
+    // ── KVS 分支：从 h264_t 拿编码后的码流 ──
     if (config.kvs_enabled && !config.kvs_stream_name.empty()) {
-        ss << " t. ! queue max-size-buffers=3 leaky=downstream"
-           << " ! " << encoder_desc
-           << " ! h264parse config-interval=-1"
+        ss << " h264_t. ! queue max-size-buffers=3 leaky=downstream"
            << " ! kvssink name=kvs_sink"
            << " stream-name=" << config.kvs_stream_name
            << " storage-size=" << config.kvs_storage_size_mb
            << " aws-region=" << config.kvs_region
            << " frame-timecodes=true"
            << " retention-period=" << config.kvs_retention_hours;
-        // Append iot-certificate if IoT credentials are configured
         if (!config.iot_credential_endpoint.empty()) {
             ss << " iot-certificate=\"iot-certificate"
                << ", iot-thing-name=(string)" << config.iot_thing_name
@@ -207,21 +210,17 @@ std::string GStreamerPipeline::build_pipeline_description(
                << "\"";
         }
     } else {
-        ss << " t. ! queue max-size-buffers=3 leaky=downstream"
+        ss << " h264_t. ! queue max-size-buffers=3 leaky=downstream"
            << " ! fakesink name=kvs_sink sync=false";
     }
 
-    // ── WebRTC branch: encode → h264parse → byte-stream appsink ──
-    // async=false: don't block pipeline PAUSED→PLAYING transition
-    // emit-signals=false: no new-sample signal (not consumed yet, would queue in GMainContext)
-    ss << " t. ! queue max-size-buffers=3 leaky=downstream"
-       << " ! " << encoder_desc
-       << " ! h264parse config-interval=-1"
+    // ── WebRTC 分支：从 h264_t 拿编码后的码流 ──
+    ss << " h264_t. ! queue max-size-buffers=3 leaky=downstream"
        << " ! video/x-h264,stream-format=byte-stream,alignment=au"
        << " ! appsink name=webrtc_sink max-buffers=1 drop=true sync=false async=false emit-signals=false";
 
-    // ── AI branch: videoconvert to BGR for Python OpenCV consumption ──
-    ss << " t. ! queue max-size-buffers=2 leaky=downstream"
+    // ── AI 分支：从 raw_t 拿原始像素，转 BGR 给 Python ──
+    ss << " raw_t. ! queue max-size-buffers=2 leaky=downstream"
        << " ! videoconvert"
        << " ! video/x-raw,format=BGR"
        << " ! appsink name=ai_sink max-buffers=2 drop=true sync=false async=false emit-signals=false";

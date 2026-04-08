@@ -138,7 +138,14 @@ Result<CameraCapabilities> V4L2Source::query_capabilities() {
 }
 
 std::string V4L2Source::gst_source_description() const {
-    return "v4l2src device=" + device_path_;
+    // 强制 MJPG 采集：让摄像头硬件做 JPEG 压缩，大幅降低 USB 带宽
+    // （YUYV 720p@15fps ≈ 27MB/s → MJPG ≈ 3-5MB/s）
+    // jpegdec 解码后再进入后续管线
+    return "v4l2src device=" + device_path_ +
+           " ! image/jpeg,width=" + std::to_string(preset_.width) +
+           ",height=" + std::to_string(preset_.height) +
+           ",framerate=" + std::to_string(preset_.fps) + "/1"
+           " ! jpegdec";
 }
 
 // Factory helper

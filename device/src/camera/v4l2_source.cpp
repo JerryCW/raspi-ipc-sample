@@ -140,17 +140,12 @@ Result<CameraCapabilities> V4L2Source::query_capabilities() {
 std::string V4L2Source::gst_source_description() const {
     // 强制 MJPG 采集：让摄像头硬件做 JPEG 压缩，大幅降低 USB 带宽
     // （YUYV 720p@15fps ≈ 27MB/s → MJPG ≈ 3-5MB/s）
-    //
-    // 使用 avdec_mjpeg 替代 jpegdec：
-    //   - avdec_mjpeg 基于 FFmpeg libavcodec，支持多线程并行解码
-    //   - max-threads=4 充分利用树莓派 5 的四核 Cortex-A76
-    //
-    // 注意：不在这里加 videoconvert，由管线主干统一处理格式转换
+    // jpegdec 解码后进入管线主干的 videoconvert
     return "v4l2src device=" + device_path_ +
            " ! image/jpeg,width=" + std::to_string(preset_.width) +
            ",height=" + std::to_string(preset_.height) +
            ",framerate=" + std::to_string(preset_.fps) + "/1"
-           " ! avdec_mjpeg max-threads=4";
+           " ! jpegdec";
 }
 
 // Factory helper

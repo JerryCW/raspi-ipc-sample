@@ -205,8 +205,10 @@ std::string GStreamerPipeline::build_pipeline_description(
        << " ! tee name=h264_t";
 
     // ── KVS 分支：从 h264_t 拿编码后的码流 ──
+    // kvssink 需要显式 H.264 caps 才能 link 成功
     if (config.kvs_enabled && !config.kvs_stream_name.empty()) {
         ss << " h264_t. ! queue max-size-buffers=3 leaky=downstream"
+           << " ! video/x-h264,stream-format=byte-stream,alignment=au"
            << " ! kvssink name=kvs_sink"
            << " stream-name=" << config.kvs_stream_name
            << " storage-size=" << config.kvs_storage_size_mb

@@ -130,3 +130,33 @@ _暂无。_
 **涉及的文件/组件：** 全部测试文件（只运行，未修改）
 
 ---
+
+### 2026-04-09 — GStreamer 管线 CPU 优化：单编码器架构
+
+**概要：** 将 GStreamer 管线从双编码器（KVS + WebRTC 各一个 x264enc）优化为单编码器 + 两级 tee 架构，同时修复多个管线问题。
+
+**优化前：** smart-camera 主进程 CPU 占用 ~49-50%，Load average ~1.85
+
+**优化后：** CPU 占用 ~43.9%，Load average ~0.63
+
+**做了什么：**
+1. 两级 tee 单编码器：`raw_t`（raw video）→ 编码链 → `h264_t`（H.264）→ KVS + WebRTC。编码只做一次。
+2. kvssink 需要 `stream-format=avc`，WebRTC 需要 `byte-stream`。h264_t 输出 byte-stream，kvssink 分支加 `h264parse` 做格式转换（零 CPU 开销）。
+3. x264enc 加 `threads=2`，限制编码线程数减少上下文切换。
+4. V4L2 管线加入 `image/jpeg` caps + `jpegdec`（`build_pipeline_description` 之前缺失）。
+5. 修复 appsink 引用计数：`gst_bin_get_by_name` 返回的引用延迟到线程退出后 unref。
+6. udev 规则创建 `/dev/IMX678` 稳定符号链接，解决 `/dev/videoX` 编号漂移。
+
+**踩过的坑：**
+- `avdec_mjpeg` 在 GStreamer 1.22 上需要 `jpegparse`、没有 `max-threads` 属性、APP0 警告刷屏，最终放弃换回 `jpegdec`。
+- kvssink 的 `videosink_templ` 要求 `stream-format=avc`，之前误以为它不参与 caps 协商，实际上是 caps 格式不匹配。通过阅读 KVS Producer SDK 源码确认。
+- `gst_bin_get_by_name` 返回的 appsink 在线程启动后立即 unref 导致悬空指针（`invalid unclassed pointer in cast to GstAppSink`）。
+
+**待优化：**
+- AI feed 线程零堆分配（消除每帧 2.7MB vector new/delete）
+- YUYV 替代 MJPG（USB 3.0 下省掉 jpegdec 解码，实测 CPU 更低）
+- x264enc speed-preset 从 ultrafast 提到 superfast（改善画质，需 CPU 余量）
+
+**涉及的文件/组件：** `device/src/pipeline/gstreamer_pipeline.cpp`, `device/src/camera/v4l2_source.cpp`, `device/src/main.cpp`, `.kiro/steering/tech.md`
+
+---

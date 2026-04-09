@@ -205,10 +205,9 @@ std::string GStreamerPipeline::build_pipeline_description(
        << " ! tee name=h264_t";
 
     // ── KVS 分支：从 h264_t 拿编码后的码流 ──
-    // kvssink 需要显式 H.264 caps 才能 link 成功
+    // kvssink 直接接受 H.264 数据，不需要额外 caps filter
     if (config.kvs_enabled && !config.kvs_stream_name.empty()) {
         ss << " h264_t. ! queue max-size-buffers=3 leaky=downstream"
-           << " ! video/x-h264,stream-format=byte-stream,alignment=au"
            << " ! kvssink name=kvs_sink"
            << " stream-name=" << config.kvs_stream_name
            << " storage-size=" << config.kvs_storage_size_mb
@@ -231,8 +230,9 @@ std::string GStreamerPipeline::build_pipeline_description(
     }
 
     // ── WebRTC 分支：从 h264_t 拿编码后的码流 ──
-    // caps 已在 h264_t 前固定为 byte-stream/au，无需重复
+    // appsink 需要显式 caps 确保拿到 byte-stream 格式
     ss << " h264_t. ! queue max-size-buffers=3 leaky=downstream"
+       << " ! video/x-h264,stream-format=byte-stream,alignment=au"
        << " ! appsink name=webrtc_sink max-buffers=1 drop=true sync=false async=false emit-signals=false";
 
     // ── AI 分支：从 raw_t 拿原始像素，转 BGR 给 Python ──

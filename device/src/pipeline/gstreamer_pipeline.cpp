@@ -189,25 +189,15 @@ std::string GStreamerPipeline::build_pipeline_description(
        << ",framerate=" << config.video_preset.fps << "/1"
        << ",pixel-aspect-ratio=1/1";
 
-    // 两级 Tee 架构：
-    //   raw_t (raw video) → 编码链 + AI 分支
-    //   h264_t (H.264)    → KVS + WebRTC
-    // 编码器只实例化一次，KVS 和 WebRTC 共享同一份 H.264 码流
-    ss << " ! tee name=raw_t";
+    // 单级 Tee：分发 raw video 到三个分支
+    // KVS 和 WebRTC 各自有独立编码器（kvssink 不兼容 tee 的 caps 协商）
+    ss << " ! tee name=t";
 
-    // ── 编码链：encode once → h264parse → caps → tee(h264) ──
-    // h264parse 后必须加 caps filter 固定 stream-format 和 alignment，
-    // 否则 tee 下游的 kvssink 和 appsink 对 H.264 caps 协商冲突
-    ss << " raw_t. ! queue max-size-buffers=3 leaky=downstream"
-       << " ! " << encoder_desc
-       << " ! h264parse config-interval=-1"
-       << " ! video/x-h264,stream-format=byte-stream,alignment=au"
-       << " ! tee name=h264_t";
-
-    // ── KVS 分支：从 h264_t 拿编码后的码流 ──
-    // kvssink 直接接受 H.264 数据，不需要额外 caps filter
+    // ── KVS 分支：encode → h264parse → kvssink ──
     if (config.kvs_enabled && !config.kvs_stream_name.empty()) {
-        ss << " h264_t. ! queue max-size-buffers=3 leaky=downstream"
+        ss << " t. ! queue max-size-buffers=3 leaky=downstream"
+           << " ! " << encoder_desc
+           << " ! h264parse config-interval=-1"
            << " ! kvssink name=kvs_sink"
            << " stream-name=" << config.kvs_stream_name
            << " storage-size=" << config.kvs_storage_size_mb
@@ -225,18 +215,19 @@ std::string GStreamerPipeline::build_pipeline_description(
                << "\"";
         }
     } else {
-        ss << " h264_t. ! queue max-size-buffers=3 leaky=downstream"
+        ss << " t. ! queue max-size-buffers=3 leaky=downstream"
            << " ! fakesink name=kvs_sink sync=false";
     }
 
-    // ── WebRTC 分支：从 h264_t 拿编码后的码流 ──
-    // appsink 需要显式 caps 确保拿到 byte-stream 格式
-    ss << " h264_t. ! queue max-size-buffers=3 leaky=downstream"
+    // ── WebRTC 分支：encode → h264parse → byte-stream appsink ──
+    ss << " t. ! queue max-size-buffers=3 leaky=downstream"
+       << " ! " << encoder_desc
+       << " ! h264parse config-interval=-1"
        << " ! video/x-h264,stream-format=byte-stream,alignment=au"
        << " ! appsink name=webrtc_sink max-buffers=1 drop=true sync=false async=false emit-signals=false";
 
-    // ── AI 分支：从 raw_t 拿原始像素，转 BGR 给 Python ──
-    ss << " raw_t. ! queue max-size-buffers=2 leaky=downstream"
+    // ── AI 分支：videoconvert to BGR ──
+    ss << " t. ! queue max-size-buffers=2 leaky=downstream"
        << " ! videoconvert"
        << " ! video/x-raw,format=BGR"
        << " ! appsink name=ai_sink max-buffers=2 drop=true sync=false async=false emit-signals=false";

@@ -161,7 +161,14 @@ std::string GStreamerPipeline::build_pipeline_description(
             ss << "libcamerasrc";
             break;
         case CameraSourceType::V4L2_USB:
-            ss << "v4l2src device=" << config.device_path;
+            // 强制 MJPG 采集 + jpegdec 解码：
+            // USB 摄像头 YUYV 720p@15fps ≈ 27MB/s，超出 USB 2.0 带宽
+            // MJPG ≈ 3-5MB/s，由摄像头硬件压缩
+            ss << "v4l2src device=" << config.device_path
+               << " ! image/jpeg,width=" << config.video_preset.width
+               << ",height=" << config.video_preset.height
+               << ",framerate=" << config.video_preset.fps << "/1"
+               << " ! jpegdec";
             break;
         case CameraSourceType::VIDEOTESTSRC:
         default:

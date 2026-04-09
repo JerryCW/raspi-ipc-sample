@@ -143,6 +143,7 @@ aws ecs update-service --cluster raspi-eye-cluster --service raspi-eye-web --for
 - `gst_bin_get_by_name` 返回的元素引用（refcount+1）不能在线程还在使用该指针时 `gst_object_unref`。如果 appsink 指针被传给后台线程，必须在线程退出后才能 unref，否则指针悬空导致 `invalid unclassed pointer in cast to GstAppSink`。
 - Linux `/dev/videoX` 编号不固定，每次重启或 USB 拔插都可能变。用 udev 规则创建稳定符号链接：`SUBSYSTEM=="video4linux", ENV{ID_VENDOR_ID}=="xxxx", ENV{ID_MODEL_ID}=="xxxx", ATTR{index}=="0", SYMLINK+="IMX678"`。注意用 `ENV{}` 匹配而非 `ATTRS{}`，后者需要沿设备树向上匹配，容易失败。
 - `build_pipeline_description` 中 V4L2 分支必须包含 `image/jpeg` caps + `jpegdec`。USB 摄像头 YUYV 720p@15fps ≈ 27MB/s 超出 USB 2.0 带宽，只有 MJPG 模式（≈ 3-5MB/s）才能稳定工作。之前 `gst_source_description()` 里写了但 `build_pipeline_description` 没用它，导致 v4l2src 尝试 YUYV 协商失败。
+- USB 3.0 环境下 YUYV 比 MJPG 更省 CPU：省掉了摄像头端 JPEG 压缩 + CPU 端 jpegdec 解码。`gst-launch-1.0 v4l2src ! video/x-raw,format=YUY2,... ! videoconvert ! fakesink` 实测 CPU 更低。但 YUYV 在高分辨率下受限（4K 可能只有 5fps），720p@15fps 没问题。如果后续提到 1080p@30fps 以上，需要切回 MJPG。
 
 ### TODO: 端云协同推理（Edge-Cloud Collaborative Inference）
 

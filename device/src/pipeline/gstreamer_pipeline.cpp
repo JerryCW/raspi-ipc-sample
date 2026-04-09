@@ -195,10 +195,13 @@ std::string GStreamerPipeline::build_pipeline_description(
     // 编码器只实例化一次，KVS 和 WebRTC 共享同一份 H.264 码流
     ss << " ! tee name=raw_t";
 
-    // ── 编码链：encode once → h264parse → tee(h264) ──
+    // ── 编码链：encode once → h264parse → caps → tee(h264) ──
+    // h264parse 后必须加 caps filter 固定 stream-format 和 alignment，
+    // 否则 tee 下游的 kvssink 和 appsink 对 H.264 caps 协商冲突
     ss << " raw_t. ! queue max-size-buffers=3 leaky=downstream"
        << " ! " << encoder_desc
        << " ! h264parse config-interval=-1"
+       << " ! video/x-h264,stream-format=byte-stream,alignment=au"
        << " ! tee name=h264_t";
 
     // ── KVS 分支：从 h264_t 拿编码后的码流 ──
@@ -226,8 +229,8 @@ std::string GStreamerPipeline::build_pipeline_description(
     }
 
     // ── WebRTC 分支：从 h264_t 拿编码后的码流 ──
+    // caps 已在 h264_t 前固定为 byte-stream/au，无需重复
     ss << " h264_t. ! queue max-size-buffers=3 leaky=downstream"
-       << " ! video/x-h264,stream-format=byte-stream,alignment=au"
        << " ! appsink name=webrtc_sink max-buffers=1 drop=true sync=false async=false emit-signals=false";
 
     // ── AI 分支：从 raw_t 拿原始像素，转 BGR 给 Python ──

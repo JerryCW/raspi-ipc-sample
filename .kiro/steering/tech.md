@@ -138,7 +138,7 @@ aws ecs update-service --cluster raspi-eye-cluster --service raspi-eye-web --for
 - Raspberry Pi 5 CSI driver is `rp1-cfe` (Pi 4 is `bcm2835-unicam`) — detect both.
 - GCC 12 strict mode requires explicit `#include <mutex>` in all files using mutex types.
 - AWS IoT cert validation: use `X509_V_FLAG_PARTIAL_CHAIN`; full chain validation happens server-side during mTLS.
-- kvssink 不参与标准 GStreamer caps 协商，不能放在 `tee` 后面。尝试用两级 tee（raw_t → encoder → h264_t → kvssink + appsink）共享单编码器会失败：kvssink 的 sink pad 不接受通过 tee 分发的 caps，报 `could not link queue to kvs_sink`。必须让 kvssink 直接接在自己的 encoder → h264parse 链后面（单级 tee + 双编码器架构）。
+- kvssink 的 video sink pad 要求 `stream-format=avc`（源码确认：`videosink_templ` 定义为 `video/x-h264, stream-format=(string)avc, alignment=(string)au`）。而 WebRTC appsink 需要 `byte-stream`。两级 tee 共享编码器时，h264_t tee 输出 `byte-stream`，kvssink 分支需要额外加一个 `h264parse` 做 `byte-stream → avc` 格式转换（只是 NAL 单元重新打包，CPU 开销接近零）。之前误以为 kvssink 不参与 caps 协商，实际上它是标准的 GStreamer 元素，只是 caps 要求和 WebRTC 不同。
 - `avdec_mjpeg`（GStreamer 1.22 / libav）的 sink caps 要求 `parsed: true`，必须在前面加 `jpegparse`。但 `jpegparse` 对某些 USB 摄像头（如 DECXIN/IMX678）的 JPEG APP0 段不兼容，每帧刷 warning。且 GStreamer 1.22 的 `avdec_mjpeg` 没有 `max-threads` 属性（更高版本才有）。在树莓派 5 + GStreamer 1.22 环境下，`jpegdec` 是更稳定的选择。
 - `gst_bin_get_by_name` 返回的元素引用（refcount+1）不能在线程还在使用该指针时 `gst_object_unref`。如果 appsink 指针被传给后台线程，必须在线程退出后才能 unref，否则指针悬空导致 `invalid unclassed pointer in cast to GstAppSink`。
 - Linux `/dev/videoX` 编号不固定，每次重启或 USB 拔插都可能变。用 udev 规则创建稳定符号链接：`SUBSYSTEM=="video4linux", ENV{ID_VENDOR_ID}=="xxxx", ENV{ID_MODEL_ID}=="xxxx", ATTR{index}=="0", SYMLINK+="IMX678"`。注意用 `ENV{}` 匹配而非 `ATTRS{}`，后者需要沿设备树向上匹配，容易失败。

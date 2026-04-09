@@ -513,6 +513,8 @@ int main(int argc, char* argv[]) {
 
         if (appsink && GST_IS_APP_SINK(appsink)) {
             frame_pull_running.store(true);
+            // 注意：不在这里 unref appsink — 线程持有该指针直到 shutdown。
+            // unref 在 frame pull 线程结束后由 shutdown step 负责。
             frame_pull_thread = std::make_unique<std::thread>(
                 [&webrtc, &log_mgr, &frame_pull_running, &health_mon, &watchdog, appsink]() {
                     log_mgr->log(LogLevel::INFO, "main", "Frame pull thread started");
@@ -560,6 +562,8 @@ int main(int argc, char* argv[]) {
                         gst_sample_unref(sample);
                     }
 
+                    // 线程结束后释放 appsink 引用
+                    gst_object_unref(appsink);
                     log_mgr->log(LogLevel::INFO, "main", "Frame pull thread stopped");
                 });
 
@@ -568,11 +572,10 @@ int main(int argc, char* argv[]) {
         } else {
             log_mgr->log(LogLevel::WARNING, "main",
                 "webrtc_sink appsink not found — frame pull thread not started");
-        }
-
-        // Release our ref to appsink (pipeline still holds one)
-        if (appsink) {
-            gst_object_unref(appsink);
+            // 没有启动线程，直接释放引用
+            if (appsink) {
+                gst_object_unref(appsink);
+            }
         }
     }
 #else
@@ -640,6 +643,8 @@ int main(int argc, char* argv[]) {
                         gst_sample_unref(sample);
                     }
 
+                    // 线程结束后释放 ai_appsink 引用
+                    gst_object_unref(ai_appsink);
                     log_mgr->log(LogLevel::INFO, "main", "AI frame feed thread stopped");
                 });
 
@@ -648,10 +653,9 @@ int main(int argc, char* argv[]) {
         } else {
             log_mgr->log(LogLevel::WARNING, "main",
                 "ai_sink appsink not found — AI frame feed thread not started");
-        }
-
-        if (ai_appsink) {
-            gst_object_unref(ai_appsink);
+            if (ai_appsink) {
+                gst_object_unref(ai_appsink);
+            }
         }
     }
 #endif

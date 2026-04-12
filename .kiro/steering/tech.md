@@ -1,5 +1,71 @@
 # Tech Stack & Build System
 
+## 系统架构
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Raspberry Pi 5 (Linux aarch64)                                     │
+│                                                                     │
+│  ┌─────────────┐    ┌──────────────────────────────────────────┐   │
+│  │ USB Camera   │    │  smart-camera (C++17)                    │   │
+│  │ (IMX678)     │───▶│                                          │   │
+│  │ /dev/IMX678  │    │  v4l2src → jpegdec → videoconvert        │   │
+│  └─────────────┘    │       │                                   │   │
+│                      │       ▼                                   │   │
+│                      │    raw_t (tee)                             │   │
+│                      │    ├─▶ x264enc → h264parse → h264_t (tee) │   │
+│                      │    │   ├─▶ h264parse(avc) → kvssink ──────┼───┼──▶ AWS KVS
+│                      │    │   └─▶ appsink(webrtc_sink) ──────────┼───┼──▶ WebRTC Viewers
+│                      │    │                                      │   │
+│                      │    └─▶ videoconvert(BGR) → appsink(ai_sink)│  │
+│                      │            │                               │   │
+│                      │            ▼                               │   │
+│                      │     FrameBufferPool → AIPipeline           │   │
+│                      │            │                               │   │
+│                      │            ▼                               │   │
+│                      │     FrameExporter (shm + unix socket)      │   │
+│                      └────────────┼──────────────────────────────┘   │
+│                                   │ IPC                              │
+│                      ┌────────────▼──────────────────────────────┐   │
+│                      │  activity-detector (Python)                │   │
+│                      │  YOLO → 检测 → S3 上传 → DynamoDB          │   │
+│                      └───────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│  AWS Cloud (ap-southeast-1)                                         │
+│                                                                     │
+│  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐    │
+│  │ KVS          │  │ IoT Core     │  │ S3 (截图)              │    │
+│  │ (录像回放)    │  │ (X.509 mTLS) │  │   ↓                    │    │
+│  └──────────────┘  └──────────────┘  │ Lambda → SageMaker     │    │
+│                                       │   ↓                    │    │
+│  ┌──────────────┐  ┌──────────────┐  │ DynamoDB (事件)        │    │
+│  │ ECS (Viewer) │  │ Cognito      │  └────────────────────────┘    │
+│  │ raspi-eye-web│  │ (用户认证)    │                                │
+│  └──────────────┘  └──────────────┘                                │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+## GStreamer 管线结构（单编码器两级 tee）
+
+```
+v4l2src(/dev/IMX678)
+  → image/jpeg,720p@15fps
+  → jpegdec
+  → videoconvert
+  → videoscale
+  → video/x-raw,I420,720p@15fps
+  → tee(raw_t)
+     ├─▶ queue → x264enc(ultrafast,threads=2) → h264parse
+     │     → video/x-h264,byte-stream → tee(h264_t)
+     │        ├─▶ queue → h264parse → video/x-h264,avc → kvssink (KVS 云录像)
+     │        └─▶ queue → appsink:webrtc_sink (WebRTC 实时预览)
+     │
+     └─▶ queue → videoconvert → video/x-raw,BGR → appsink:ai_sink
+           → FrameBufferPool → FrameExporter(shm) → Python YOLO
+```
+
 ## Language & Standard
 - C++17 (required minimum)
 - Error handling via `Result<T>` type (no exceptions) — all public APIs return `Result<T>`

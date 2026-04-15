@@ -121,13 +121,13 @@ def _process_event(
         len(screenshot_keys), duration_sec,
     )
 
-    # 6. SageMaker 验证
-    verified = False
+    # 6. SageMaker 验证（三态：true / false / failed）
+    verified = "false"
     species_info: dict = {}
 
     if screenshot_keys:
         result = _verify_bird(s3_client, sagemaker_client, bucket, screenshot_keys)
-        verified = result.get("verified", False)
+        verified = result.get("verified", "false")
         species_info = result
     else:
         logger.info("无截图，跳过 SageMaker 验证")
@@ -162,8 +162,10 @@ def _verify_bird(
 ) -> dict:
     """调用 SageMaker 验证鸟类，early-stop 策略。
 
-    返回 {"verified": bool, "species": str, "species_confidence": float,
-           "species_cn": str, "family": str, "family_cn": str}
+    返回 {"verified": "true"/"false"/"failed", "species": str, ...}
+    - "true": SageMaker 推理成功完成（识别出鸟类，有 species 字段）
+    - "false": SageMaker 推理成功但未识别为鸟（所有截图低于阈值）
+    - "failed": SageMaker 调用出错
     """
     for i, s3_key in enumerate(screenshot_keys):
         try:
@@ -177,8 +179,7 @@ def _verify_bird(
             predictions = _invoke_sagemaker(sagemaker_client, image_bytes)
         except Exception as exc:
             logger.error("SageMaker 调用失败 %s: %s", s3_key, exc)
-            # SageMaker 故障时不标记 verified，保持 false
-            return {"verified": False}
+            return {"verified": "failed"}
 
         if not predictions:
             continue
@@ -190,12 +191,12 @@ def _verify_bird(
         logger.info("SageMaker %d/%d: species=%s confidence=%.4f",
                      i + 1, len(screenshot_keys), species, confidence)
 
-        if confidence >= BIRD_CONFIDENCE_THRESHOLD:
+        if confidence >= BIRD_CONFIDENCE_THRESHOLD and species != "not_a_bird":
             # 查映射表（SageMaker 返回空格格式，映射表用下划线格式）
             map_key = species.replace(" ", "_")
             info = _SPECIES_MAP.get(map_key, {})
             return {
-                "verified": True,
+                "verified": "true",
                 "species": species.replace("_", " "),
                 "species_confidence": round(confidence, 4),
                 "species_cn": info.get("species_cn", ""),
@@ -203,7 +204,8 @@ def _verify_bird(
                 "family_cn": info.get("family_cn", ""),
             }
 
-    return {"verified": False}
+    # 所有截图都低于阈值或识别为 not_a_bird — 推理成功但未识别为鸟
+    return {"verified": "true"}
 
 
 def _extract_top_detection(detections: dict) -> tuple[str, float]:
@@ -297,8 +299,8 @@ def _write_dynamodb(
         "verified": verified,
     }
 
-    # SageMaker 回填字段（仅 verified=True 时有值）
-    if verified and species_info:
+    # SageMaker 回填字段（仅识别出鸟类时有值）
+    if verified == "true" and species_info.get("species"):
         for field in ("species", "species_cn", "family", "family_cn"):
             val = species_info.get(field, "")
             if val:
@@ -336,7 +338,7 @@ def _write_verified_json(
     result["verified"] = verified
     result["yolo_top_class"] = yolo_top_class
 
-    if verified and species_info:
+    if verified == "true" and species_info.get("species"):
         for field in ("species", "species_cn", "family", "family_cn", "species_confidence"):
             val = species_info.get(field)
             if val is not None:

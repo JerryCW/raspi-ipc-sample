@@ -15,7 +15,7 @@ phases:
     commands:
       - echo Building Docker image...
       - cd viewer
-      - docker build --build-arg VITE_COGNITO_USER_POOL_ID=${VITE_COGNITO_USER_POOL_ID} --build-arg VITE_COGNITO_CLIENT_ID=${VITE_COGNITO_CLIENT_ID} --build-arg VITE_COGNITO_IDENTITY_POOL_ID=${VITE_COGNITO_IDENTITY_POOL_ID} --build-arg VITE_COGNITO_DOMAIN=${VITE_COGNITO_DOMAIN} --build-arg VITE_COGNITO_REDIRECT_URI=${VITE_COGNITO_REDIRECT_URI} --build-arg VITE_AWS_REGION=${VITE_AWS_REGION} -t kvs-camera-viewer .
+      - docker build --build-arg VITE_COGNITO_USER_POOL_ID=${VITE_COGNITO_USER_POOL_ID} --build-arg VITE_COGNITO_CLIENT_ID=${VITE_COGNITO_CLIENT_ID} --build-arg VITE_COGNITO_IDENTITY_POOL_ID=${VITE_COGNITO_IDENTITY_POOL_ID} --build-arg VITE_COGNITO_DOMAIN=${VITE_COGNITO_DOMAIN} --build-arg VITE_COGNITO_REDIRECT_URI=${VITE_COGNITO_REDIRECT_URI} --build-arg VITE_AWS_REGION=${VITE_AWS_REGION} --build-arg VITE_DEFAULT_CHANNEL_NAME=RaspiEyeAlphaChannel --build-arg VITE_DEFAULT_STREAM_NAME=RaspiEyeAlphaStream -t kvs-camera-viewer .
       - docker tag kvs-camera-viewer:latest "${ECR_URI}:latest"
   post_build:
     commands:

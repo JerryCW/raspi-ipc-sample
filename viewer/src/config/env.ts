@@ -9,6 +9,6 @@ export const env: EnvConfig = {
     redirectUri: import.meta.env.VITE_COGNITO_REDIRECT_URI || window.location.origin,
   },
   defaultRegion: import.meta.env.VITE_AWS_REGION || 'ap-southeast-1',
-  defaultChannelName: import.meta.env.VITE_DEFAULT_CHANNEL_NAME || 'raspi_camera_channel',
-  defaultStreamName: import.meta.env.VITE_DEFAULT_STREAM_NAME || 'raspi_camera_stream',
+  defaultChannelName: import.meta.env.VITE_DEFAULT_CHANNEL_NAME || 'RaspiEyeAlphaChannel',
+  defaultStreamName: import.meta.env.VITE_DEFAULT_STREAM_NAME || 'RaspiEyeAlphaStream',
 };

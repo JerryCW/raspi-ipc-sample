@@ -191,8 +191,9 @@ def _verify_bird(
                      i + 1, len(screenshot_keys), species, confidence)
 
         if confidence >= BIRD_CONFIDENCE_THRESHOLD:
-            # 查映射表
-            info = _SPECIES_MAP.get(species, {})
+            # 查映射表（SageMaker 返回空格格式，映射表用下划线格式）
+            map_key = species.replace(" ", "_")
+            info = _SPECIES_MAP.get(map_key, {})
             return {
                 "verified": True,
                 "species": species.replace("_", " "),

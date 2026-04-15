@@ -223,9 +223,12 @@ export function useHLS(config: {
           return;
         }
 
-        // Step 2: Check for native HLS support (Safari)
+        // Step 2: Check for native HLS support (Safari only)
+        // Chrome on macOS may report canPlayType truthy but fail to play KVS HLS.
+        // Force hls.js for non-Safari browsers.
         // Validates: Requirements 4.5
-        const canPlayNativeHLS = video.canPlayType('application/vnd.apple.mpegurl');
+        const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+        const canPlayNativeHLS = isSafari && video.canPlayType('application/vnd.apple.mpegurl');
 
         if (canPlayNativeHLS) {
           // Safari native HLS — set src directly

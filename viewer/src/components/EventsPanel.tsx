@@ -6,11 +6,18 @@ import { fetchThumbnailUrl, exportVideoClip } from '../services/events';
 
 // ===== Constants =====
 
-const CLASS_ICONS: Record<ActivityEvent['detectedClass'], string> = {
+const CLASS_ICONS: Record<string, string> = {
   person: '🧑',
   cat: '🐱',
   dog: '🐕',
   bird: '🐦',
+};
+
+const CLASS_CN: Record<string, string> = {
+  person: '人',
+  cat: '猫',
+  dog: '狗',
+  bird: '鸟',
 };
 
 // ===== Props =====
@@ -24,10 +31,11 @@ export interface EventsPanelProps {
 
 // ===== Helpers =====
 
-/** Format ms timestamp to UTC+8 HH:MM:SS. */
-function formatTimestamp(ms: number): string {
-  const d = new Date(ms + 8 * 60 * 60 * 1000);
-  return d.toISOString().slice(11, 19);
+/** Format ISO 8601 string to UTC+8 HH:MM:SS. */
+function formatTimestamp(isoStr: string): string {
+  const d = new Date(isoStr);
+  const utc8 = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+  return utc8.toISOString().slice(11, 19);
 }
 
 /** Format duration in seconds to human-readable string. */
@@ -64,7 +72,7 @@ function toInputDate(d: Date): string {
  */
 export function EventsPanel({ idToken, streamName, credentials, region }: EventsPanelProps) {
   const [selectedDate, setSelectedDate] = useState(todayUTC8);
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [activeEventId, setActiveEventId] = useState<string | null>(null);
   const { events, isLoading, error, retry } = useEvents(selectedDate, idToken);
 
   const { status, videoRef, start, stop } = useHLS({
@@ -81,15 +89,17 @@ export function EventsPanel({ idToken, streamName, credentials, region }: Events
     setSelectedDate(d);
     // Stop current playback when date changes
     stop();
-    setActiveSessionId(null);
+    setActiveEventId(null);
   }, [stop]);
 
   const handleEventClick = useCallback(
     (event: ActivityEvent) => {
-      setActiveSessionId(event.sessionId);
+      setActiveEventId(event.eventId);
+      const startMs = new Date(event.startTime).getTime();
+      const endMs = new Date(event.endTime).getTime();
       start(
-        new Date(event.kvsStartTimestamp - 5000),
-        new Date(event.kvsEndTimestamp + 5000),
+        new Date(startMs - 5000),
+        new Date(endMs + 5000),
       );
     },
     [start],
@@ -172,10 +182,10 @@ export function EventsPanel({ idToken, streamName, credentials, region }: Events
           <div className="flex flex-col gap-2 overflow-y-auto max-h-[50vh]">
             {events.map((event) => (
               <EventCard
-                key={event.sessionId}
+                key={event.eventId}
                 event={event}
                 idToken={idToken}
-                isActive={event.sessionId === activeSessionId}
+                isActive={event.eventId === activeEventId}
                 onClick={handleEventClick}
               />
             ))}
@@ -205,10 +215,10 @@ function EventCard({ event, idToken, isActive, onClick }: EventCardProps) {
   // Load thumbnail on mount
   useEffect(() => {
     if (!idToken) return;
-    fetchThumbnailUrl(event.sessionId, 'start', idToken)
+    fetchThumbnailUrl(event.eventId, idToken)
       .then(setThumbUrl)
       .catch(() => setThumbError(true));
-  }, [event.sessionId, idToken]);
+  }, [event.eventId, idToken]);
 
   const handleClick = useCallback(() => {
     onClick(event);
@@ -216,14 +226,14 @@ function EventCard({ event, idToken, isActive, onClick }: EventCardProps) {
 
   const handleDownload = useCallback(
     async (e: React.MouseEvent) => {
-      e.stopPropagation(); // Prevent triggering event playback
+      e.stopPropagation();
       if (!idToken || downloadState === 'loading') return;
 
       setDownloadState('loading');
       setDownloadError(null);
 
       try {
-        const { blob, filename } = await exportVideoClip(event.sessionId, idToken);
+        const { blob, filename } = await exportVideoClip(event.eventId, idToken);
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -243,11 +253,25 @@ function EventCard({ event, idToken, isActive, onClick }: EventCardProps) {
         }, 3000);
       }
     },
-    [event.sessionId, idToken, downloadState],
+    [event.eventId, idToken, downloadState],
   );
 
-  const icon = CLASS_ICONS[event.detectedClass] ?? '❓';
-  const isBirdWithSpecies = event.primaryClass === 'bird' && !!event.birdSpecies;
+  const icon = CLASS_ICONS[event.yoloTopClass] ?? '❓';
+
+  // 展示逻辑：鸟类显示科目+种类中文，非鸟显示中文类名
+  const isBird = event.verified === 'true' && !!event.speciesCn;
+  let displayName: string;
+  let displayConfidence: number;
+
+  if (isBird) {
+    displayName = event.familyCn
+      ? `${event.familyCn} · ${event.speciesCn}`
+      : event.speciesCn!;
+    displayConfidence = event.speciesConfidence ?? 0;
+  } else {
+    displayName = CLASS_CN[event.yoloTopClass] ?? event.yoloTopClass;
+    displayConfidence = event.yoloTopConfidence;
+  }
 
   return (
     <button
@@ -263,7 +287,7 @@ function EventCard({ event, idToken, isActive, onClick }: EventCardProps) {
         {thumbUrl && !thumbError ? (
           <img
             src={thumbUrl}
-            alt={event.detectedClass}
+            alt={event.yoloTopClass}
             className="h-full w-full object-cover"
             onError={() => setThumbError(true)}
           />
@@ -275,28 +299,25 @@ function EventCard({ event, idToken, isActive, onClick }: EventCardProps) {
       {/* Info */}
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <div className="flex items-center gap-1.5">
-          {event.detectedClasses && event.detectedClasses.length > 0 ? (
-            <span className="text-base">
-              {event.detectedClasses.map((cls) => CLASS_ICONS[cls as ActivityEvent['detectedClass']] ?? '❓').join('')}
-            </span>
-          ) : (
-            <span className="text-base">{icon}</span>
-          )}
+          <span className="text-base">{isBird ? '🐦' : icon}</span>
           <span className="text-sm font-medium text-gray-900">
-            {isBirdWithSpecies ? event.birdSpecies : event.detectedClass}
-          </span>
-          <span className="ml-auto text-xs text-gray-400">
-            {event.detectionCount}次检测
+            {displayName}
           </span>
         </div>
         <div className="text-xs text-gray-500">
-          {formatTimestamp(event.kvsStartTimestamp)} – {formatTimestamp(event.kvsEndTimestamp)}
+          {formatTimestamp(event.startTime)} – {formatTimestamp(event.endTime)}
           <span className="ml-2 text-gray-400">
-            {formatDuration(event.durationSeconds)}
+            {formatDuration(event.durationSec)}
           </span>
         </div>
         <div className="text-xs text-gray-400">
-          置信度 {(event.maxConfidence * 100).toFixed(0)}%
+          置信度 {(displayConfidence * 100).toFixed(0)}%
+          {event.verified === 'true' && !isBird && (
+            <span className="ml-1 text-green-500">✓ 已验证</span>
+          )}
+          {event.verified === 'failed' && (
+            <span className="ml-1 text-red-400">⚠ 验证失败</span>
+          )}
         </div>
       </div>
 

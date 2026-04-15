@@ -1,9 +1,7 @@
 import type { ActivityEvent } from '../types';
 
 /**
- * Fetch activity events for a given date.
- *
- * Validates: Requirements 5.2, 5.5
+ * 获取指定日期的活动事件列表。
  */
 export async function fetchEvents(
   date: string,
@@ -23,17 +21,14 @@ export async function fetchEvents(
 }
 
 /**
- * Fetch a pre-signed thumbnail URL for an event session.
- *
- * Validates: Requirements 5.5
+ * 获取事件缩略图的 presigned URL。
  */
 export async function fetchThumbnailUrl(
-  sessionId: string,
-  type: 'start' | 'end',
+  eventId: string,
   token: string,
 ): Promise<string> {
   const res = await fetch(
-    `/api/events/${encodeURIComponent(sessionId)}/thumbnail?type=${type}`,
+    `/api/events/${encodeURIComponent(eventId)}/thumbnail`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
 
@@ -47,17 +42,14 @@ export async function fetchThumbnailUrl(
 }
 
 /**
- * Download an event video clip.
- * Returns a Blob and filename for browser download.
- *
- * Validates: Requirements 2.2, 2.4, 2.5
+ * 下载事件视频片段。
  */
 export async function exportVideoClip(
-  sessionId: string,
+  eventId: string,
   token: string,
 ): Promise<{ blob: Blob; filename: string }> {
   const res = await fetch(
-    `/api/events/${encodeURIComponent(sessionId)}/clip`,
+    `/api/events/${encodeURIComponent(eventId)}/clip`,
     {
       headers: { Authorization: `Bearer ${token}` },
     },
@@ -73,7 +65,7 @@ export async function exportVideoClip(
   const blob = await res.blob();
   const disposition = res.headers.get('Content-Disposition') || '';
   const filenameMatch = disposition.match(/filename="?([^"]+)"?/);
-  const filename = filenameMatch?.[1] || `event_${sessionId}.mkv`;
+  const filename = filenameMatch?.[1] || `event_${eventId}.mkv`;
 
   return { blob, filename };
 }

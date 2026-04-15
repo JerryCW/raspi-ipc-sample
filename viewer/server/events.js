@@ -20,9 +20,9 @@ import jwksClient from 'jwks-rsa';
 
 const region = process.env.COGNITO_REGION || 'ap-southeast-1';
 const userPoolId = process.env.COGNITO_USER_POOL_ID || '';
-const tableName = process.env.DYNAMODB_TABLE || 'smart-camera-events';
+const tableName = process.env.DYNAMODB_TABLE || 'raspi-eye-events';
 const s3Bucket = process.env.S3_BUCKET || 'smart-camera-captures';
-const deviceId = process.env.DEVICE_ID || '';
+const deviceId = process.env.DEVICE_ID || 'RaspiEyeAlpha';
 
 const MAX_CLIP_DURATION_SEC = 300;
 const CLIP_BUFFER_SEC = 5;
@@ -151,15 +151,15 @@ async function getEvents(req, res) {
     return res.status(400).json({ error: 'Date range exceeds 90 days' });
   }
 
-  const startTimestamp = `${date}T00:00:00.000Z`;
-  const endTimestamp = `${date}T23:59:59.999Z`;
+  const startTimestamp = `${date}T00:00:00Z`;
+  const endTimestamp = `${date}T23:59:59Z`;
 
   try {
     const result = await getDocClient().send(
       new QueryCommand({
         TableName: tableName,
         KeyConditionExpression:
-          'device_id = :deviceId AND event_timestamp BETWEEN :start AND :end',
+          'device_id = :deviceId AND start_time BETWEEN :start AND :end',
         ExpressionAttributeValues: {
           ':deviceId': deviceId,
           ':start': startTimestamp,
@@ -169,20 +169,23 @@ async function getEvents(req, res) {
     );
 
     const events = (result.Items || []).map((item) => ({
-      sessionId: item.session_id,
-      eventTimestamp: item.event_timestamp,
-      detectedClass: item.detected_class,
-      maxConfidence: item.max_confidence,
-      durationSeconds: item.duration_seconds,
-      kvsStartTimestamp: item.kvs_start_timestamp,
-      kvsEndTimestamp: item.kvs_end_timestamp,
-      detectionCount: item.detection_count,
-      verificationStatus: item.verification_status,
-      detectedClasses: item.detected_classes,
-      primaryClass: item.primary_class,
-      birdSpecies: item.bird_species,
+      eventId: item.event_id,
+      startTime: item.start_time,
+      endTime: item.end_time,
+      durationSec: item.duration_sec ?? 0,
+      s3Prefix: item.s3_prefix,
+      thumbnailKey: item.thumbnail_key,
+      snapshotCount: item.snapshot_count ?? 0,
+      kvsStreamName: item.kvs_stream_name,
+      kvsRegion: item.kvs_region,
+      yoloTopClass: item.yolo_top_class,
+      yoloTopConfidence: item.yolo_top_confidence ?? 0,
+      verified: item.verified ?? 'false',
+      species: item.species,
+      speciesCn: item.species_cn,
+      family: item.family,
+      familyCn: item.family_cn,
       speciesConfidence: item.species_confidence,
-      candidateScreenshots: item.candidate_screenshots,
     }));
 
     return res.json({ events, count: events.length });
@@ -197,24 +200,22 @@ async function getEvents(req, res) {
 // ---------------------------------------------------------------------------
 
 async function getThumbnail(req, res) {
-  const { sessionId } = req.params;
-  const type = req.query.type || 'start';
+  const { eventId } = req.params;
 
-  if (type !== 'start' && type !== 'end') {
-    return res.status(400).json({ error: 'Invalid type. Use start or end' });
+  if (!eventId) {
+    return res.status(400).json({ error: 'Missing eventId' });
   }
 
   try {
-    // Query by session_id — we need a scan/filter since session_id is not a key
-    // Use a GSI in production; for now filter on device_id partition
+    // Query by event_id — filter on device_id partition
     const result = await getDocClient().send(
       new QueryCommand({
         TableName: tableName,
         KeyConditionExpression: 'device_id = :deviceId',
-        FilterExpression: 'session_id = :sessionId',
+        FilterExpression: 'event_id = :eventId',
         ExpressionAttributeValues: {
           ':deviceId': deviceId,
-          ':sessionId': sessionId,
+          ':eventId': eventId,
         },
       })
     );
@@ -225,13 +226,13 @@ async function getThumbnail(req, res) {
     }
 
     const item = items[0];
-    const s3Key = type === 'start' ? item.s3_start_jpeg_path : item.s3_end_jpeg_path;
+    const s3Key = item.thumbnail_key;
 
     if (!s3Key) {
-      return res.status(404).json({ error: 'Event not found' });
+      return res.status(404).json({ error: 'No thumbnail available' });
     }
 
-    const expiresIn = 900; // 15 minutes in seconds
+    const expiresIn = 900;
 
     const url = await getSignedUrl(
       getS3Client(),
@@ -272,10 +273,10 @@ function generateClipFilename(detectedClass, kvsStartTimestamp) {
 // ---------------------------------------------------------------------------
 
 async function getVideoClip(req, res) {
-  const { sessionId } = req.params;
+  const { eventId } = req.params;
 
-  if (!sessionId || typeof sessionId !== 'string' || !sessionId.trim()) {
-    return res.status(400).json({ error: 'Invalid sessionId' });
+  if (!eventId || typeof eventId !== 'string' || !eventId.trim()) {
+    return res.status(400).json({ error: 'Invalid eventId' });
   }
 
   try {
@@ -283,10 +284,10 @@ async function getVideoClip(req, res) {
       new QueryCommand({
         TableName: tableName,
         KeyConditionExpression: 'device_id = :deviceId',
-        FilterExpression: 'session_id = :sessionId',
+        FilterExpression: 'event_id = :eventId',
         ExpressionAttributeValues: {
           ':deviceId': deviceId,
-          ':sessionId': sessionId,
+          ':eventId': eventId,
         },
       })
     );
@@ -297,19 +298,22 @@ async function getVideoClip(req, res) {
     }
 
     const item = items[0];
-    const kvsStart = item.kvs_start_timestamp;
-    const kvsEnd = item.kvs_end_timestamp;
+    const startTimeStr = item.start_time;
+    const endTimeStr = item.end_time;
+    const streamName = item.kvs_stream_name || kvsStreamName;
 
-    if (!kvsStart || !kvsEnd) {
+    if (!startTimeStr || !endTimeStr) {
       return res.status(404).json({ error: 'Event has no video timestamps' });
     }
 
+    const kvsStart = new Date(startTimeStr).getTime();
+    const kvsEnd = new Date(endTimeStr).getTime();
     const { clipStart, clipEnd } = computeClipRange(kvsStart, kvsEnd);
 
     const kvsClient = new KinesisVideoClient({ region });
     const endpointResp = await kvsClient.send(
       new GetDataEndpointCommand({
-        StreamName: kvsStreamName,
+        StreamName: streamName,
         APIName: 'GET_CLIP',
       })
     );
@@ -324,7 +328,7 @@ async function getVideoClip(req, res) {
     });
     const clipResp = await archivedClient.send(
       new GetClipCommand({
-        StreamName: kvsStreamName,
+        StreamName: streamName,
         ClipFragmentSelector: {
           FragmentSelectorType: ClipFragmentSelectorType.SERVER_TIMESTAMP,
           TimestampRange: {
@@ -340,7 +344,7 @@ async function getVideoClip(req, res) {
     }
 
     const filename = generateClipFilename(
-      item.detected_class || 'event',
+      item.yolo_top_class || 'event',
       kvsStart
     );
     res.setHeader('Content-Type', 'video/x-matroska');
@@ -351,18 +355,18 @@ async function getVideoClip(req, res) {
 
     stream.on('end', () => {
       console.log(
-        `Video clip exported: sessionId=${sessionId}, range=${clipStart.toISOString()}~${clipEnd.toISOString()}`
+        `Video clip exported: eventId=${eventId}, range=${clipStart.toISOString()}~${clipEnd.toISOString()}`
       );
     });
 
     stream.on('error', (err) => {
-      console.error(`Stream error during clip export: sessionId=${sessionId}`, err);
+      console.error(`Stream error during clip export: eventId=${eventId}`, err);
       if (!res.headersSent) {
         res.status(500).json({ error: 'Stream error during video export' });
       }
     });
   } catch (err) {
-    console.error(`Video clip export failed: sessionId=${sessionId}`, err);
+    console.error(`Video clip export failed: eventId=${eventId}`, err);
     return res.status(500).json({ error: 'Failed to export video clip' });
   }
 }

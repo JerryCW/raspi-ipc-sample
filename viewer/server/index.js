@@ -17,8 +17,8 @@ app.get('/health', (_req, res) => {
 
 // Events API — protected by JWT
 app.get('/api/events', verifyJwt, getEvents);
-app.get('/api/events/:sessionId/thumbnail', verifyJwt, getThumbnail);
-app.get('/api/events/:sessionId/clip', verifyJwt, getVideoClip);
+app.get('/api/events/:eventId/thumbnail', verifyJwt, getThumbnail);
+app.get('/api/events/:eventId/clip', verifyJwt, getVideoClip);
 
 // Catch-all for unknown API routes — return 404
 app.all('/api/{*splat}', (_req, res) => {

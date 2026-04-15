@@ -105,19 +105,22 @@ export interface EnvConfig {
 // ===== 活动事件相关 =====
 
 export interface ActivityEvent {
-  sessionId: string;
-  eventTimestamp: string;
-  detectedClass: 'person' | 'cat' | 'dog' | 'bird';
-  maxConfidence: number;
-  durationSeconds: number;
-  kvsStartTimestamp: number;
-  kvsEndTimestamp: number;
-  detectionCount: number;
-  thumbnailUrl?: string;
-  verificationStatus?: 'verified' | 'rejected';
-  detectedClasses?: string[];
-  primaryClass?: string;
-  birdSpecies?: string;
+  eventId: string;
+  startTime: string;          // ISO 8601 UTC
+  endTime: string;            // ISO 8601 UTC
+  durationSec: number;
+  s3Prefix: string;
+  thumbnailKey: string;
+  snapshotCount: number;
+  kvsStreamName: string;
+  kvsRegion: string;
+  yoloTopClass: string;
+  yoloTopConfidence: number;
+  verified: 'true' | 'false' | 'failed';
+  // SageMaker 回填（verified=true 且识别出鸟时有值）
+  species?: string;
+  speciesCn?: string;
+  family?: string;
+  familyCn?: string;
   speciesConfidence?: number;
-  candidateScreenshots?: string[];
 }

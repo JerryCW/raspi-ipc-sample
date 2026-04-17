@@ -1,37 +1,36 @@
 #!/usr/bin/env python3
-"""SageMaker deployment script for BioCLIP bird species classifier.
+"""SageMaker deployment script for DINOv2 fine-tuned bird species classifier.
 
 Steps:
-  1. Download HuggingFace model `imageomics/bioclip`
-  2. Package as model.tar.gz (model weights + inference.py + requirements.txt + bird_labels.json)
-  3. Upload to s3://smart-camera-captures/models/bird-classifier/model.tar.gz
-  4. Create SageMaker Model → EndpointConfig (Serverless) → Endpoint
-  5. Register model version in SageMaker Model Registry
+  1. Package model.tar.gz from local checkpoints
+     (model.pth + model_config.json + class_names.json + code/inference.py + code/handler_dinov2.py + code/requirements.txt)
+  2. Upload to s3://smart-camera-captures/models/bird-classifier/model.tar.gz
+  3. Create SageMaker Model → EndpointConfig (Serverless) → Endpoint
+  4. Register model version in SageMaker Model Registry
 
 Prerequisites:
   - AWS credentials configured (aws configure)
-  - IAM role `smart-camera-sagemaker-role` already created with:
-      - AmazonSageMakerFullAccess
-      - AmazonS3ReadOnlyAccess
-  - pip install boto3 huggingface_hub
+  - IAM role `smart-camera-sagemaker-role` already created
+  - Local model checkpoint at cloud/sagemaker/training/checkpoints/model.pth
+  - pip install boto3
 
 Usage:
   python cloud/sagemaker/deploy_model.py
+  python cloud/sagemaker/deploy_model.py --model-path /path/to/model.pth
 """
 
+import argparse
 import os
 import tarfile
 import tempfile
 import time
 
 import boto3
-from huggingface_hub import snapshot_download
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 REGION = "ap-southeast-1"
-HF_MODEL_ID = "imageomics/bioclip"
 
 S3_BUCKET = "smart-camera-captures"
 S3_MODEL_KEY = "models/bird-classifier/model.tar.gz"
@@ -42,14 +41,19 @@ ENDPOINT_CONFIG_NAME = "bird-classifier-config"
 ENDPOINT_NAME = "bird-classifier-endpoint"
 
 # Serverless inference settings
-SERVERLESS_MEMORY_MB = 4096
+SERVERLESS_MEMORY_MB = 6144  # DINOv2-Large 需要更多内存
 SERVERLESS_MAX_CONCURRENCY = 5
 
 # Model Registry
 MODEL_PACKAGE_GROUP_NAME = "bird-classifier-models"
 
-# SageMaker PyTorch inference image (must match requirements)
-# Using the pre-built PyTorch 2.0 inference container for Python 3.10
+# Default local checkpoint path
+DEFAULT_CHECKPOINT_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "training", "checkpoints",
+)
+
+# SageMaker PyTorch inference image
 FRAMEWORK_VERSION = "2.0.1"
 PY_VERSION = "py310"
 
@@ -64,7 +68,7 @@ sm_client = boto3.client("sagemaker", region_name=REGION)
 
 def get_sagemaker_role_arn() -> str:
     """Retrieve the ARN of the SageMaker execution role."""
-    print(f"[1/7] Looking up IAM role '{SAGEMAKER_ROLE_NAME}' ...")
+    print(f"[1/6] Looking up IAM role '{SAGEMAKER_ROLE_NAME}' ...")
     response = iam_client.get_role(RoleName=SAGEMAKER_ROLE_NAME)
     arn = response["Role"]["Arn"]
     print(f"       Role ARN: {arn}")
@@ -89,48 +93,52 @@ def get_pytorch_inference_image_uri() -> str:
     return image_uri
 
 
-def download_model(download_dir: str) -> str:
-    """Download the HuggingFace model to a local directory."""
-    print(f"[2/7] Downloading HuggingFace model '{HF_MODEL_ID}' ...")
-    model_dir = snapshot_download(
-        repo_id=HF_MODEL_ID,
-        local_dir=os.path.join(download_dir, "model"),
-    )
-    print(f"       Downloaded to: {model_dir}")
-    return model_dir
+def package_model(checkpoint_dir: str, work_dir: str) -> str:
+    """Package DINOv2 model checkpoint + inference code into model.tar.gz.
 
-
-def package_model(model_dir: str, work_dir: str) -> str:
-    """Package model weights + inference.py + requirements.txt into model.tar.gz."""
-    print("[3/7] Packaging model.tar.gz ...")
+    Contents:
+      model.pth           — DINOv2 fine-tuned weights
+      model_config.json   — model type, class names, thresholds
+      class_names.json    — class name list (backward compat)
+      code/inference.py   — SageMaker pluggable inference entry point
+      code/handler_dinov2.py — DINOv2 handler implementation
+      code/requirements.txt  — Python dependencies
+    """
+    print("[2/6] Packaging model.tar.gz ...")
 
     tar_path = os.path.join(work_dir, "model.tar.gz")
     script_dir = os.path.dirname(os.path.abspath(__file__))
 
-    with tarfile.open(tar_path, "w:gz") as tar:
-        # Add all model files (weights, config.json, etc.)
-        for item in os.listdir(model_dir):
-            item_path = os.path.join(model_dir, item)
-            # Skip hidden files and __pycache__
-            if item.startswith(".") or item == "__pycache__":
-                continue
-            tar.add(item_path, arcname=item)
-            print(f"       + {item}")
+    # Verify checkpoint exists
+    model_pth = os.path.join(checkpoint_dir, "model.pth")
+    if not os.path.exists(model_pth):
+        raise FileNotFoundError(f"model.pth not found in {checkpoint_dir}")
 
-        # Add inference code
-        inference_path = os.path.join(script_dir, "inference.py")
-        tar.add(inference_path, arcname="code/inference.py")
+    with tarfile.open(tar_path, "w:gz") as tar:
+        # Model weights
+        tar.add(model_pth, arcname="model.pth")
+        print("       + model.pth")
+
+        # Model config
+        config_path = os.path.join(script_dir, "model_config.json")
+        tar.add(config_path, arcname="model_config.json")
+        print("       + model_config.json")
+
+        # Class names (backward compat)
+        class_names_path = os.path.join(checkpoint_dir, "class_names.json")
+        if os.path.exists(class_names_path):
+            tar.add(class_names_path, arcname="class_names.json")
+            print("       + class_names.json")
+
+        # Inference code
+        tar.add(os.path.join(script_dir, "inference.py"), arcname="code/inference.py")
         print("       + code/inference.py")
 
-        # Add requirements
-        requirements_path = os.path.join(script_dir, "requirements.txt")
-        tar.add(requirements_path, arcname="code/requirements.txt")
-        print("       + code/requirements.txt")
+        tar.add(os.path.join(script_dir, "handler_dinov2.py"), arcname="code/handler_dinov2.py")
+        print("       + code/handler_dinov2.py")
 
-        # Add bird labels
-        labels_path = os.path.join(script_dir, "bird_labels.json")
-        tar.add(labels_path, arcname="bird_labels.json")
-        print("       + bird_labels.json")
+        tar.add(os.path.join(script_dir, "requirements.txt"), arcname="code/requirements.txt")
+        print("       + code/requirements.txt")
 
     size_mb = os.path.getsize(tar_path) / (1024 * 1024)
     print(f"       Archive size: {size_mb:.1f} MB")
@@ -140,7 +148,7 @@ def package_model(model_dir: str, work_dir: str) -> str:
 def upload_to_s3(tar_path: str) -> str:
     """Upload model.tar.gz to S3."""
     s3_uri = f"s3://{S3_BUCKET}/{S3_MODEL_KEY}"
-    print(f"[4/7] Uploading to {s3_uri} ...")
+    print(f"[3/6] Uploading to {s3_uri} ...")
 
     s3_client.upload_file(tar_path, S3_BUCKET, S3_MODEL_KEY)
     print("       Upload complete.")
@@ -149,7 +157,7 @@ def upload_to_s3(tar_path: str) -> str:
 
 def create_sagemaker_model(role_arn: str, s3_uri: str) -> str:
     """Create a SageMaker Model pointing to the S3 model artifact."""
-    print(f"[5/7] Creating SageMaker Model '{MODEL_NAME}' ...")
+    print(f"[4/6] Creating SageMaker Model '{MODEL_NAME}' ...")
 
     image_uri = get_pytorch_inference_image_uri()
 
@@ -179,7 +187,7 @@ def create_sagemaker_model(role_arn: str, s3_uri: str) -> str:
 
 def create_endpoint(role_arn: str) -> str:
     """Create Serverless EndpointConfig and Endpoint."""
-    print(f"[6/7] Creating Serverless Endpoint '{ENDPOINT_NAME}' ...")
+    print(f"[5/6] Creating Serverless Endpoint '{ENDPOINT_NAME}' ...")
 
     # --- EndpointConfig ---
     try:
@@ -239,7 +247,7 @@ def create_endpoint(role_arn: str) -> str:
 
 def register_model_version(s3_uri: str, role_arn: str) -> str:
     """Register the model in SageMaker Model Registry."""
-    print(f"[7/7] Registering model in Model Registry '{MODEL_PACKAGE_GROUP_NAME}' ...")
+    print(f"[6/6] Registering model in Model Registry '{MODEL_PACKAGE_GROUP_NAME}' ...")
 
     image_uri = get_pytorch_inference_image_uri()
 
@@ -247,7 +255,7 @@ def register_model_version(s3_uri: str, role_arn: str) -> str:
     try:
         sm_client.create_model_package_group(
             ModelPackageGroupName=MODEL_PACKAGE_GROUP_NAME,
-            ModelPackageGroupDescription="Bird species classifier models (BioCLIP)",
+            ModelPackageGroupDescription="Bird species classifier models (DINOv2 fine-tuned)",
         )
         print(f"       Created model package group '{MODEL_PACKAGE_GROUP_NAME}'")
     except sm_client.exceptions.ClientError as e:
@@ -259,8 +267,8 @@ def register_model_version(s3_uri: str, role_arn: str) -> str:
     response = sm_client.create_model_package(
         ModelPackageGroupName=MODEL_PACKAGE_GROUP_NAME,
         ModelPackageDescription=(
-            f"BioCLIP zero-shot bird classifier from HuggingFace ({HF_MODEL_ID}). "
-            f"Open-vocabulary species recognition, Serverless Inference."
+            "DINOv2-ViT-L/14 fine-tuned bird species classifier (39 species). "
+            "Serverless Inference."
         ),
         InferenceSpecification={
             "Containers": [
@@ -287,11 +295,18 @@ def register_model_version(s3_uri: str, role_arn: str) -> str:
 
 def main() -> None:
     """Run the full deployment pipeline."""
+    parser = argparse.ArgumentParser(description="Deploy DINOv2 bird classifier to SageMaker")
+    parser.add_argument(
+        "--model-path", default=DEFAULT_CHECKPOINT_DIR,
+        help="Path to checkpoint directory containing model.pth (default: training/checkpoints/)",
+    )
+    args = parser.parse_args()
+
     print("=" * 60)
-    print("SageMaker Bird Classifier Deployment")
-    print(f"  Model:    {HF_MODEL_ID}")
-    print(f"  Region:   {REGION}")
-    print(f"  Endpoint: {ENDPOINT_NAME}")
+    print("SageMaker Bird Classifier Deployment (DINOv2)")
+    print(f"  Checkpoint: {args.model_path}")
+    print(f"  Region:     {REGION}")
+    print(f"  Endpoint:   {ENDPOINT_NAME}")
     print("=" * 60)
     print()
 
@@ -301,29 +316,24 @@ def main() -> None:
     role_arn = get_sagemaker_role_arn()
     print()
 
-    # Use a temp directory for model download and packaging
     with tempfile.TemporaryDirectory(prefix="bird-classifier-") as work_dir:
-        # Step 2: Download model from HuggingFace
-        model_dir = download_model(work_dir)
+        # Step 2: Package model.tar.gz
+        tar_path = package_model(args.model_path, work_dir)
         print()
 
-        # Step 3: Package model.tar.gz
-        tar_path = package_model(model_dir, work_dir)
-        print()
-
-        # Step 4: Upload to S3
+        # Step 3: Upload to S3
         s3_uri = upload_to_s3(tar_path)
         print()
 
-    # Step 5: Create SageMaker Model
+    # Step 4: Create SageMaker Model
     create_sagemaker_model(role_arn, s3_uri)
     print()
 
-    # Step 6: Create Endpoint
+    # Step 5: Create Endpoint
     create_endpoint(role_arn)
     print()
 
-    # Step 7: Register in Model Registry
+    # Step 6: Register in Model Registry
     register_model_version(s3_uri, role_arn)
     print()
 

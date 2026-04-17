@@ -312,7 +312,7 @@ function EventCard({ event, idToken, isActive, onClick }: EventCardProps) {
         </div>
         <div className="text-xs text-gray-400">
           置信度 {(displayConfidence * 100).toFixed(0)}%
-          {event.verified === 'true' && !isBird && (
+          {event.verified === 'true' && (
             <span className="ml-1 text-green-500">✓ 已验证</span>
           )}
           {event.verified === 'failed' && (

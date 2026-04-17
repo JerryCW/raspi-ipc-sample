@@ -127,6 +127,7 @@ export function EventsPanel({ idToken, streamName, credentials, region }: Events
             autoPlay
             playsInline
             muted
+            controls
             className="w-full object-contain"
           />
         )}

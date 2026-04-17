@@ -65,7 +65,7 @@ export async function exportVideoClip(
   const blob = await res.blob();
   const disposition = res.headers.get('Content-Disposition') || '';
   const filenameMatch = disposition.match(/filename="?([^"]+)"?/);
-  const filename = filenameMatch?.[1] || `event_${eventId}.mkv`;
+  const filename = filenameMatch?.[1] || `event_${eventId}.mp4`;
 
   return { blob, filename };
 }

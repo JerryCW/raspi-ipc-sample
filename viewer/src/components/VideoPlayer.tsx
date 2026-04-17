@@ -29,6 +29,7 @@ export function VideoPlayer({
         autoPlay
         playsInline
         muted={muted}
+        controls
         className="absolute inset-0 h-full w-full object-contain"
       />
       {!isPlaying && (

@@ -142,6 +142,7 @@ export function HLSPanel({ streamName, credentials, region, preloadedFragments }
           autoPlay
           playsInline
           muted
+          controls
           className={`w-full ${isIdle ? 'hidden' : ''}`}
         />
         {isIdle && (

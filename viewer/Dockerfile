@@ -34,6 +34,9 @@ FROM public.ecr.aws/docker/library/node:20-alpine
 
 WORKDIR /app
 
+# ffmpeg for MKV → MP4 remux
+RUN apk add --no-cache ffmpeg
+
 COPY package*.json ./
 RUN npm ci --omit=dev
 

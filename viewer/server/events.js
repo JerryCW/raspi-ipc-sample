@@ -13,6 +13,7 @@ import {
 } from '@aws-sdk/client-kinesis-video-archived-media';
 import jwt from 'jsonwebtoken';
 import jwksClient from 'jwks-rsa';
+import { spawn } from 'child_process';
 
 // ---------------------------------------------------------------------------
 // Configuration helpers
@@ -265,7 +266,7 @@ function generateClipFilename(detectedClass, kvsStartTimestamp) {
     .toISOString()
     .replace(/[:.]/g, '-')
     .slice(0, 19);
-  return `${detectedClass}_${dateStr}.mkv`;
+  return `${detectedClass}_${dateStr}.mp4`;
 }
 
 // ---------------------------------------------------------------------------
@@ -347,22 +348,44 @@ async function getVideoClip(req, res) {
       item.yolo_top_class || 'event',
       kvsStart
     );
-    res.setHeader('Content-Type', 'video/x-matroska');
+    res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-    const stream = clipResp.Payload;
-    stream.pipe(res);
+    // Remux MKV → MP4 via ffmpeg (no re-encoding, just container conversion)
+    const ffmpeg = spawn('ffmpeg', [
+      '-i', 'pipe:0',           // read MKV from stdin
+      '-c', 'copy',             // no re-encoding
+      '-movflags', 'frag_keyframe+empty_moov',  // fragmented MP4 for streaming
+      '-f', 'mp4',
+      'pipe:1',                 // write MP4 to stdout
+    ]);
 
-    stream.on('end', () => {
+    const stream = clipResp.Payload;
+    stream.pipe(ffmpeg.stdin);
+    ffmpeg.stdout.pipe(res);
+
+    ffmpeg.stderr.on('data', () => {
+      // suppress ffmpeg stderr (progress info)
+    });
+
+    ffmpeg.on('close', (code) => {
       console.log(
-        `Video clip exported: eventId=${eventId}, range=${clipStart.toISOString()}~${clipEnd.toISOString()}`
+        `Video clip exported: eventId=${eventId}, format=mp4, ffmpeg_exit=${code}, range=${clipStart.toISOString()}~${clipEnd.toISOString()}`
       );
     });
 
     stream.on('error', (err) => {
       console.error(`Stream error during clip export: eventId=${eventId}`, err);
+      ffmpeg.kill();
       if (!res.headersSent) {
         res.status(500).json({ error: 'Stream error during video export' });
+      }
+    });
+
+    ffmpeg.on('error', (err) => {
+      console.error(`ffmpeg error: eventId=${eventId}`, err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Video conversion failed' });
       }
     });
   } catch (err) {
